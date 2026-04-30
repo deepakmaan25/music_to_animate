@@ -9,7 +9,7 @@ import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import type { usePersistentProjects } from '../hooks/usePersistentProjects';
 
-type EngineId = 'bars' | 'radial' | 'particles';
+type EngineId = 'bars' | 'radial' | 'particles' | 'orbital' | 'depth' | 'terrain' | 'tunnel';
 type Status = 'idle' | 'decoding' | 'ready' | 'error';
 
 type Project = {
@@ -32,10 +32,14 @@ type ExportJob = {
   size?: number;
 };
 
-const ENGINES: { id: EngineId; name: string; description: string }[] = [
-  { id: 'bars', name: 'Spectrum Bars', description: 'Classic frequency bars across the canvas.' },
-  { id: 'radial', name: 'Radial Spectrum', description: 'Bars radiating from the center.' },
-  { id: 'particles', name: 'Particle Storm', description: 'Particles driven by bass energy.' }
+const ENGINES: { id: EngineId; name: string; description: string; group: '2D' | '3D' }[] = [
+  { id: 'bars', name: 'Spectrum Bars', description: 'Classic frequency bars across the canvas.', group: '2D' },
+  { id: 'radial', name: 'Radial Spectrum', description: 'Bars radiating from the center.', group: '2D' },
+  { id: 'particles', name: 'Particle Storm', description: 'Particles driven by bass energy.', group: '2D' },
+  { id: 'orbital', name: 'Orbital Rings', description: 'Concentric rings tilt and pulse around a glowing core.', group: '3D' },
+  { id: 'depth', name: 'Depth Field Particles', description: 'Flying through a 3D starfield with depth blur.', group: '3D' },
+  { id: 'terrain', name: 'Audio Terrain', description: 'Wireframe landscape whose peaks follow the spectrum.', group: '3D' },
+  { id: 'tunnel', name: 'Neon Tunnel', description: 'Endless neon tunnel pulsing on every beat.', group: '3D' }
 ];
 
 const PALETTES: { name: string; colors: [string, string, string] }[] = [
@@ -50,6 +54,20 @@ const PRESETS = [
   { id: 'std', name: 'Creator Standard', w: 1080, h: 1920, fps: 30, label: '1080p · 30fps' },
   { id: 'pro', name: 'Pro Master', w: 2160, h: 3840, fps: 60, label: '4K · 60fps' }
 ];
+
+function avg(arr: Uint8Array, start: number, end: number) {
+  const e = Math.min(end, arr.length);
+  let s = 0;
+  for (let i = start; i < e; i++) s += arr[i];
+  return (s / Math.max(1, e - start)) / 255;
+}
+
+function hexToRgb(hex: string) {
+  const m = hex.replace('#', '');
+  const v = m.length === 3 ? m.split('').map((c) => c + c).join('') : m;
+  const n = parseInt(v, 16);
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+}
 
 const ASPECTS: { id: '9:16' | '1:1' | '16:9'; label: string; sub: string }[] = [
   { id: '9:16', label: '9:16', sub: 'TikTok / Reels' },
@@ -79,6 +97,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [beatSensitivity, setBeatSensitivity] = useState(stored?.motion.beatSensitivity ?? 0.7);
   const [particleDensity, setParticleDensity] = useState(stored?.motion.particleDensity ?? 0.6);
   const [smoothing, setSmoothing] = useState(stored?.motion.smoothing ?? 0.8);
+  const [perfMode, setPerfMode] = useState(false);
 
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -99,6 +118,10 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const offsetRef = useRef(0);
   const rafRef = useRef<number | null>(null);
   const particlesRef = useRef<{ x: number; y: number; vx: number; vy: number; life: number; hue: number }[]>([]);
+  const starsRef = useRef<{ x: number; y: number; z: number; hue: number }[]>([]);
+  const sparksRef = useRef<{ angle: number; r: number; speed: number; life: number; ring: number }[]>([]);
+  const tunnelTRef = useRef(0);
+  const cameraTRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
 
   // Load file when provided
@@ -237,7 +260,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   useEffect(() => {
     drawFrame();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engine, palette, beatSensitivity, particleDensity, project, aspect]);
+  }, [engine, palette, beatSensitivity, particleDensity, project, aspect, perfMode]);
 
   const drawFrame = () => {
     const canvas = canvasRef.current;
@@ -356,6 +379,192 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       }
       ctx.globalAlpha = 1;
       particlesRef.current = particlesRef.current.filter((p) => p.life > 0.05);
+    } else if (engine === 'orbital') {
+      // Faded backdrop
+      ctx.fillStyle = 'rgba(8,8,15,0.35)';
+      ctx.fillRect(0, 0, w, h);
+      const cx = w / 2, cy = h / 2;
+      const bass = avg(freq, 0, 16);
+      const mids = avg(freq, 16, 80);
+      const highs = avg(freq, 80, 200);
+      cameraTRef.current += 0.004 + bass * 0.01 * sens;
+      const tilt = 0.4 + Math.sin(cameraTRef.current * 0.6) * 0.2;
+      // Glowing core
+      const coreR = (Math.min(w, h) * 0.07) * (1 + bass * sens * 0.6);
+      const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 3);
+      coreGrad.addColorStop(0, colors[0]);
+      coreGrad.addColorStop(0.4, colors[1]);
+      coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = coreGrad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, coreR * 3, 0, Math.PI * 2);
+      ctx.fill();
+      // Rings
+      const ringCount = perfMode ? 3 : 6;
+      for (let r = 0; r < ringCount; r++) {
+        const baseR = Math.min(w, h) * (0.12 + r * 0.07) * (1 + bass * sens * 0.15);
+        const thickness = 1.5 + mids * 6 * sens + r * 0.4;
+        const rot = cameraTRef.current * (0.3 + r * 0.1) + r;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(rot);
+        ctx.scale(1, Math.max(0.15, tilt - r * 0.03));
+        ctx.strokeStyle = colors[r % colors.length];
+        ctx.globalAlpha = 0.55 + mids * 0.5;
+        ctx.lineWidth = thickness;
+        ctx.beginPath();
+        ctx.arc(0, 0, baseR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        // sparks on highs
+        if (highs > 0.55 && Math.random() < 0.3) {
+          sparksRef.current.push({ angle: Math.random() * Math.PI * 2, r: baseR, speed: 0.04 + highs * 0.05, life: 1, ring: r });
+        }
+      }
+      ctx.globalAlpha = 1;
+      // render sparks
+      for (const s of sparksRef.current) {
+        s.angle += s.speed;
+        s.life *= 0.96;
+        const baseR = Math.min(w, h) * (0.12 + s.ring * 0.07);
+        const x = cx + Math.cos(s.angle) * baseR;
+        const y = cy + Math.sin(s.angle) * baseR * Math.max(0.15, tilt - s.ring * 0.03);
+        ctx.fillStyle = colors[2];
+        ctx.globalAlpha = s.life;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      sparksRef.current = sparksRef.current.filter((s) => s.life > 0.08);
+    } else if (engine === 'depth') {
+      ctx.fillStyle = 'rgba(2,2,8,0.25)';
+      ctx.fillRect(0, 0, w, h);
+      const bass = avg(freq, 0, 16);
+      const mids = avg(freq, 16, 80);
+      const highs = avg(freq, 80, 200);
+      const targetCount = perfMode ? 600 : 1500;
+      while (starsRef.current.length < targetCount) {
+        starsRef.current.push({
+          x: (Math.random() - 0.5) * 2,
+          y: (Math.random() - 0.5) * 2,
+          z: Math.random(),
+          hue: Math.random()
+        });
+      }
+      const speed = 0.005 + bass * sens * 0.04;
+      const cx = w / 2, cy = h / 2;
+      const focal = Math.min(w, h) * 0.6;
+      for (const s of starsRef.current) {
+        s.z -= speed;
+        if (s.z <= 0.02) {
+          s.x = (Math.random() - 0.5) * 2;
+          s.y = (Math.random() - 0.5) * 2;
+          s.z = 1;
+          s.hue = Math.random();
+        }
+        const sx = cx + (s.x / s.z) * focal;
+        const sy = cy + (s.y / s.z) * focal;
+        if (sx < 0 || sx > w || sy < 0 || sy > h) continue;
+        const size = (1 - s.z) * (3 + mids * 4 * sens);
+        const alpha = Math.min(1, (1 - s.z) * 1.5);
+        ctx.fillStyle = colors[Math.floor(s.hue * colors.length)] || colors[0];
+        ctx.globalAlpha = alpha * (0.6 + highs * 0.4);
+        ctx.beginPath();
+        ctx.arc(sx, sy, size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      // shockwave on bass peak
+      if (bass > 0.7 * sens) {
+        ctx.strokeStyle = colors[1];
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        ctx.arc(cx, cy, Math.min(w, h) * (0.2 + bass * 0.4), 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    } else if (engine === 'terrain') {
+      // Fly-over wireframe terrain
+      ctx.fillStyle = 'rgba(5,5,15,0.4)';
+      ctx.fillRect(0, 0, w, h);
+      const bass = avg(freq, 0, 16);
+      const mids = avg(freq, 16, 80);
+      const highs = avg(freq, 80, 200);
+      cameraTRef.current += 0.02 + bass * 0.03 * sens;
+      const cols = perfMode ? 18 : 32;
+      const rows = perfMode ? 12 : 22;
+      const horizon = h * 0.4;
+      ctx.lineWidth = 1;
+      for (let r = 0; r < rows; r++) {
+        const t = r / rows;
+        const yPersp = horizon + (h - horizon) * Math.pow(t, 1.6);
+        const scale = Math.pow(t, 1.4);
+        ctx.strokeStyle = `rgba(${hexToRgb(colors[r % colors.length])}, ${0.15 + scale * 0.6})`;
+        ctx.beginPath();
+        for (let c = 0; c <= cols; c++) {
+          const idx = Math.floor((c / cols) * (freq.length / 2));
+          const fv = (freq[idx] / 255) * sens;
+          const wave = Math.sin((c + cameraTRef.current * 8 + r * 0.6) * 0.5) * 0.5 + 0.5;
+          const height = (bass * 60 + fv * 80 + mids * 30 * wave) * scale;
+          const x = (c / cols) * w;
+          const y = yPersp - height;
+          if (c === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      // sky glow
+      const sky = ctx.createLinearGradient(0, 0, 0, horizon);
+      sky.addColorStop(0, `rgba(${hexToRgb(colors[0])}, ${0.15 + highs * 0.3})`);
+      sky.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, w, horizon);
+    } else if (engine === 'tunnel') {
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(0, 0, w, h);
+      const bass = avg(freq, 0, 16);
+      const mids = avg(freq, 16, 80);
+      const highs = avg(freq, 80, 200);
+      tunnelTRef.current += 0.015 + bass * 0.04 * sens;
+      const cx = w / 2, cy = h / 2;
+      const segments = perfMode ? 12 : 22;
+      const roll = Math.sin(tunnelTRef.current * 0.4) * 0.15;
+      for (let i = segments - 1; i >= 0; i--) {
+        const z = ((i + tunnelTRef.current) % segments) / segments;
+        const scale = 1 - z;
+        const r = Math.min(w, h) * 0.55 * scale;
+        const alpha = Math.pow(scale, 1.5);
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(roll * scale);
+        ctx.strokeStyle = colors[i % colors.length];
+        ctx.globalAlpha = alpha * (0.4 + mids * 0.6);
+        ctx.lineWidth = 1.5 + bass * 5 * sens;
+        ctx.beginPath();
+        // hexagonal tunnel ring
+        const sides = 6;
+        for (let s = 0; s <= sides; s++) {
+          const a = (s / sides) * Math.PI * 2;
+          const x = Math.cos(a) * r;
+          const y = Math.sin(a) * r;
+          if (s === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        // rim sparks
+        if (highs > 0.5 && Math.random() < 0.15 * scale) {
+          ctx.fillStyle = colors[0];
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          const a = Math.random() * Math.PI * 2;
+          ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
     }
 
     // overlay label
@@ -653,19 +862,30 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
               <TabsTrigger value="export">Export</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="style" className="pt-4 space-y-3">
-              <div className="text-xs uppercase tracking-wider text-gray-400">Engine</div>
-              {ENGINES.map((e) => (
-                <button
-                  key={e.id}
-                  onClick={() => setEngine(e.id)}
-                  className={`w-full text-left p-3 rounded-lg border transition-all ${
-                    engine === e.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'
-                  }`}
-                >
-                  <div className="font-semibold text-sm">{e.name}</div>
-                  <div className={`text-xs ${engine === e.id ? 'text-gray-600' : 'text-gray-400'}`}>{e.description}</div>
-                </button>
+            <TabsContent value="style" className="pt-4 space-y-4">
+              {(['2D', '3D'] as const).map((group) => (
+                <div key={group} className="space-y-2">
+                  <div className="text-xs uppercase tracking-wider text-gray-400 flex items-center gap-2">
+                    {group === '3D' ? '3D · Immersive' : 'Classic'}
+                    {group === '3D' && (
+                      <span className="px-1.5 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-200 border border-purple-400/30">
+                        NEW
+                      </span>
+                    )}
+                  </div>
+                  {ENGINES.filter((e) => e.group === group).map((e) => (
+                    <button
+                      key={e.id}
+                      onClick={() => setEngine(e.id)}
+                      className={`w-full text-left p-3 rounded-lg border transition-all ${
+                        engine === e.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'
+                      }`}
+                    >
+                      <div className="font-semibold text-sm">{e.name}</div>
+                      <div className={`text-xs ${engine === e.id ? 'text-gray-600' : 'text-gray-400'}`}>{e.description}</div>
+                    </button>
+                  ))}
+                </div>
               ))}
             </TabsContent>
 
@@ -697,6 +917,18 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
                 />
                 <div className="text-xs text-gray-400 mt-1">{Math.round(smoothing * 100)}%</div>
               </div>
+              <label className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10 cursor-pointer">
+                <div>
+                  <div className="text-sm font-medium">Performance mode</div>
+                  <div className="text-xs text-gray-400">Reduces detail for low-power devices.</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={perfMode}
+                  onChange={(e) => setPerfMode(e.target.checked)}
+                  className="size-4 accent-purple-500"
+                />
+              </label>
             </TabsContent>
 
             <TabsContent value="color" className="pt-4 space-y-3">

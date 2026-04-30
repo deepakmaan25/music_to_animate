@@ -1,14 +1,17 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Sparkles, Wand2, Play, Download, Music, Palette, Layers, Zap,
-  Heart, Music2, Clock, ArrowRight, Sun, Moon, FolderOpen, Trash2
+  Heart, Music2, Clock, ArrowRight, Sun, Moon, FolderOpen, Trash2, LogOut, Cloud, CloudOff
 } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import { Studio } from './components/Studio';
+import { AuthModal } from './components/AuthModal';
 import { useTheme } from './hooks/useTheme';
 import { usePersistentProjects, type StoredProject } from './hooks/usePersistentProjects';
+import { useAuth } from './hooks/useAuth';
+import { SERVER_URL, ANON_KEY } from './lib/supabase';
 
 type EngineId = 'spectrum' | 'particles' | 'geometric' | 'liquid' | 'kaleidoscope';
 type StudioEngine = 'bars' | 'radial' | 'particles';
@@ -65,6 +68,52 @@ const MOOD_FILTERS = ['All', 'High-Energy', 'Chill', 'Vocal-Heavy', 'Instrumenta
 export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
   const persist = usePersistentProjects();
+  const { user, session, signOut } = useAuth();
+  const [authOpen, setAuthOpen] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+
+  // On login, push local projects to server + pull remote ones
+  useEffect(() => {
+    if (!session?.access_token || !user) return;
+    let cancelled = false;
+    (async () => {
+      setSyncStatus('syncing');
+      try {
+        const headers = {
+          Authorization: `Bearer ${session.access_token}`,
+          apikey: ANON_KEY,
+          'Content-Type': 'application/json'
+        };
+        // Push local projects
+        const local = Object.values(persist.projects);
+        await Promise.all(
+          local.map((p) =>
+            fetch(`${SERVER_URL}/projects/${p.id}`, {
+              method: 'PUT',
+              headers,
+              body: JSON.stringify(p)
+            })
+          )
+        );
+        // Pull remote
+        const res = await fetch(`${SERVER_URL}/projects`, { headers });
+        if (res.ok) {
+          const { projects: remote } = await res.json();
+          if (!cancelled && Array.isArray(remote)) {
+            for (const r of remote as StoredProject[]) {
+              persist.importProject(r);
+            }
+          }
+        }
+        if (!cancelled) setSyncStatus('synced');
+      } catch (e) {
+        console.log('Project sync failed:', e);
+        if (!cancelled) setSyncStatus('error');
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.access_token, user?.id]);
 
   const [view, setView] = useState<'landing' | 'studio'>('landing');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -154,14 +203,27 @@ export default function App() {
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            {projectList.length > 0 && (
+            {user ? (
+              <div className="hidden sm:flex items-center gap-2 px-2.5 h-9 rounded-full border" style={{ background: 'var(--surface-elevated)', borderColor: 'var(--surface-glass-border)' }}>
+                <div className="size-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white" style={{ background: 'var(--hero-cta-gradient)' }}>
+                  {(user.email || '?').slice(0, 1).toUpperCase()}
+                </div>
+                <span className="text-xs max-w-[140px] truncate" style={{ color: 'var(--text-strong)' }}>{user.email}</span>
+                <span title={syncStatus} className="ml-1 flex items-center" style={{ color: 'var(--text-muted)' }}>
+                  {syncStatus === 'syncing' ? <Cloud className="size-3.5 animate-pulse" /> : syncStatus === 'error' ? <CloudOff className="size-3.5 text-red-500" /> : <Cloud className="size-3.5 text-emerald-500" />}
+                </span>
+                <button onClick={signOut} className="size-7 rounded-md flex items-center justify-center hover:bg-black/5" aria-label="Sign out">
+                  <LogOut className="size-3.5" style={{ color: 'var(--text-muted)' }} />
+                </button>
+              </div>
+            ) : (
               <Button
                 variant="ghost"
-                onClick={() => openExisting(projectList[0].id)}
+                onClick={() => setAuthOpen(true)}
                 className="h-9 hidden sm:inline-flex"
                 style={{ color: 'var(--text-strong)' }}
               >
-                <FolderOpen className="size-4 mr-2" /> Recent
+                Sign in
               </Button>
             )}
             <Button
@@ -441,6 +503,8 @@ export default function App() {
           </motion.div>
         </div>
       </section>
+
+      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
 
       <footer
         className="relative py-10 px-6 border-t"

@@ -96,6 +96,13 @@ export function usePersistentProjects() {
     });
   }, []);
 
+  const importProject = useCallback((project: StoredProject) => {
+    setStore((s) => {
+      if (s.projects[project.id]) return s;
+      return { ...s, projects: { ...s.projects, [project.id]: project } };
+    });
+  }, []);
+
   const addExport = useCallback((projectId: string, exp: StoredExport) => {
     setStore((s) => {
       const cur = s.projects[projectId];

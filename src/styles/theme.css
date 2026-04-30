@@ -47,11 +47,12 @@
   --section-bg: linear-gradient(180deg, #ffffff 0%, #fafafa 100%);
   --engine-card-bg: linear-gradient(160deg, rgba(255, 255, 255, 0.9) 0%, rgba(250, 245, 255, 0.7) 100%);
   --engine-card-border: rgba(124, 58, 237, 0.18);
-  --surface-elevated: rgba(255, 255, 255, 0.72);
-  --surface-glass: rgba(255, 255, 255, 0.6);
-  --surface-glass-border: rgba(0, 0, 0, 0.06);
+  --surface-elevated: rgba(255, 255, 255, 0.85);
+  --surface-glass: rgba(255, 255, 255, 0.7);
+  --surface-glass-border: rgba(15, 23, 42, 0.1);
   --text-strong: #0a0a0f;
-  --text-muted: #475569;
+  --text-muted: #334155;
+  --bg-preview: #0a0a0f;
   --accent-glow: 0 20px 60px -15px rgba(124, 58, 237, 0.45);
   --grid-line: rgba(15, 23, 42, 0.05);
   --nav-bg: rgba(255, 255, 255, 0.7);
@@ -104,7 +105,8 @@
   --surface-glass: rgba(15, 15, 22, 0.6);
   --surface-glass-border: rgba(255, 255, 255, 0.08);
   --text-strong: #fafafa;
-  --text-muted: #94a3b8;
+  --text-muted: #cbd5e1;
+  --bg-preview: #000000;
   --accent-glow: 0 20px 60px -15px rgba(168, 85, 247, 0.5);
   --grid-line: rgba(255, 255, 255, 0.04);
   --nav-bg: rgba(8, 8, 12, 0.7);
