@@ -115,6 +115,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.access_token, user?.id]);
 
+   const isIOS = useMemo(() => {
+    if (typeof navigator === 'undefined') return false;
+    return /iPad|iPhone|iPod/.test(navigator.userAgent);
+  }, []);
+
   const [view, setView] = useState<'landing' | 'studio'>('landing');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(persist.lastOpenedProjectId);
@@ -170,7 +175,15 @@ export default function App() {
       className="min-h-screen transition-colors duration-300"
       style={{ background: 'var(--hero-bg-gradient)', color: 'var(--text-strong)' }}
     >
-      <input ref={fileInputRef} type="file" accept="audio/*" hidden onChange={onFileSelected} />
+      <input
+  ref={fileInputRef}
+  type="file"
+  // On iOS we drop `accept` entirely because Safari often greys out valid audio files.
+  // On other platforms we still filter to common audio types/extensions.
+  accept={isIOS ? undefined : 'audio/*,audio/mpeg,.mp3,.m4a,.wav,.flac,.ogg'}
+  hidden
+  onChange={onFileSelected}
+/>
 
       {/* Subtle grid backdrop */}
       <div
