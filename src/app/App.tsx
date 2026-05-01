@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Sparkles, Wand2, Play, Download, Music, Palette, Layers, Zap,
-  Heart, Music2, Clock, ArrowRight, Sun, Moon, FolderOpen, Trash2, LogOut, Cloud, CloudOff
+  Heart, Music2, Clock, ArrowRight, Sun, Moon, Trash2, LogOut, Cloud, CloudOff
 } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
@@ -13,11 +13,11 @@ import { usePersistentProjects, type StoredProject } from './hooks/usePersistent
 import { useAuth } from './hooks/useAuth';
 import { SERVER_URL, ANON_KEY } from './lib/supabase';
 
-type EngineId = 'spectrum' | 'particles' | 'geometric' | 'liquid' | 'kaleidoscope';
-type StudioEngine = 'bars' | 'radial' | 'particles';
+type EngineId = 'bars' | 'radial' | 'depth' | 'orbital' | 'terrain' | 'tunnel' | 'neon_spheres' | 'fractal' | 'solar';
+type StudioEngine = 'bars' | 'radial' | 'depth' | 'orbital' | 'terrain' | 'tunnel' | 'neon_spheres' | 'fractal' | 'solar';
 
 const ENGINES: {
-  id: EngineId;
+  id: string;
   studio: StudioEngine;
   name: string;
   icon: React.ReactNode;
@@ -27,43 +27,71 @@ const ENGINES: {
   gradient: string;
 }[] = [
   {
-    id: 'spectrum', studio: 'radial',
+    id: 'radial_spectrum', studio: 'radial',
     name: 'Radial Spectrum', icon: <Layers className="size-5" />,
     description: 'Circular frequency visualization with dynamic color shifts.',
     moods: ['High-Energy', 'Futuristic'], genres: ['EDM', 'Electronic'],
     gradient: 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)'
   },
   {
-    id: 'particles', studio: 'particles',
-    name: 'Particle Storm', icon: <Sparkles className="size-5" />,
-    description: 'Thousands of particles dancing to every beat.',
+    id: 'depth_field', studio: 'depth',
+    name: 'Depth Field', icon: <Sparkles className="size-5" />,
+    description: 'Cinematic starfield that surges and sparkles on every beat.',
     moods: ['Dreamy', 'Chill'], genres: ['Ambient', 'Lo-fi'],
     gradient: 'linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%)'
   },
   {
-    id: 'geometric', studio: 'bars',
+    id: 'geometric_pulse', studio: 'bars',
     name: 'Geometric Pulse', icon: <Zap className="size-5" />,
     description: 'Bold shapes morphing with bass and rhythm.',
     moods: ['Aggressive', 'High-Energy'], genres: ['Hip-Hop', 'Trap'],
     gradient: 'linear-gradient(135deg, #f97316 0%, #ef4444 100%)'
   },
   {
-    id: 'liquid', studio: 'particles',
-    name: 'Liquid Motion', icon: <Wand2 className="size-5" />,
-    description: 'Fluid blobs reacting to frequency bands.',
-    moods: ['Organic', 'Vocal-Heavy'], genres: ['Lo-fi', 'Indie'],
-    gradient: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'
+    id: 'neon_tunnel', studio: 'tunnel',
+    name: 'Neon Tunnel', icon: <Wand2 className="size-5" />,
+    description: 'Glowing hexagonal tunnel that pulses and zooms with bass.',
+    moods: ['Futuristic', 'High-Energy'], genres: ['EDM', 'Synthwave'],
+    gradient: 'linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%)'
   },
   {
-    id: 'kaleidoscope', studio: 'radial',
+    id: 'audio_terrain', studio: 'terrain',
+    name: 'Audio Terrain', icon: <Music2 className="size-5" />,
+    description: 'Cinematic wireframe landscape that rises and ripples with your track.',
+    moods: ['Cinematic', 'Instrumental'], genres: ['Post-Rock', 'Ambient'],
+    gradient: 'linear-gradient(135deg, #10b981 0%, #06b6d4 100%)'
+  },
+  {
+    id: 'orbital_rings', studio: 'orbital',
+    name: 'Orbital Rings', icon: <Layers className="size-5" />,
+    description: 'Concentric glowing rings that tilt and pulse around a neon core.',
+    moods: ['Dreamy', 'Futuristic'], genres: ['Electronic', 'Ambient'],
+    gradient: 'linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)'
+  },
+  {
+    id: 'neon_spheres', studio: 'neon_spheres',
+    name: 'Neon Spheres', icon: <Sparkles className="size-5" />,
+    description: 'Glowing neon spheres that wobble and scale with each frequency band.',
+    moods: ['Dreamy', 'Vocal-Heavy'], genres: ['Pop', 'Indie'],
+    gradient: 'linear-gradient(135deg, #ec4899 0%, #f59e0b 100%)'
+  },
+  {
+    id: 'fractal_kaleido', studio: 'fractal',
     name: 'Kaleidoscope', icon: <Palette className="size-5" />,
-    description: 'Trippy fractal patterns synchronized with music.',
+    description: 'Trippy mirrored fractal patterns synchronized with music energy.',
     moods: ['Trippy', 'Instrumental'], genres: ['Experimental', 'Psytrance'],
     gradient: 'linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%)'
-  }
+  },
+  {
+    id: 'solar_system', studio: 'solar',
+    name: 'Solar System', icon: <Zap className="size-5" />,
+    description: 'Central sun with orbiting planets; flares erupt on every bass hit.',
+    moods: ['Cinematic', 'Futuristic'], genres: ['Sci-Fi', 'Electronic'],
+    gradient: 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)'
+  },
 ];
 
-const MOOD_FILTERS = ['All', 'High-Energy', 'Chill', 'Vocal-Heavy', 'Instrumental', 'Trippy'];
+const MOOD_FILTERS = ['All', 'High-Energy', 'Chill', 'Dreamy', 'Futuristic', 'Trippy', 'Cinematic', 'Instrumental'];
 
 export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();

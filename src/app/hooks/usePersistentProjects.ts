@@ -157,6 +157,7 @@ export function usePersistentProjects() {
     lastOpenedProjectId: store.lastOpenedProjectId,
     createProject,
     updateProject,
+    importProject,
     addExport,
     updateExport,
     deleteProject,
