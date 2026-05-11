@@ -8,6 +8,7 @@ import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import { Studio } from './components/Studio';
 import { AuthModal } from './components/AuthModal';
+import { AuthCallback } from './components/AuthCallback';
 import { useTheme } from './hooks/useTheme';
 import { usePersistentProjects, type StoredProject } from './hooks/usePersistentProjects';
 import { useAuth } from './hooks/useAuth';
@@ -93,7 +94,19 @@ const ENGINES: {
 
 const MOOD_FILTERS = ['All', 'High-Energy', 'Chill', 'Dreamy', 'Futuristic', 'Trippy', 'Cinematic', 'Instrumental'];
 
+/**
+ * Top-level router wrapper — no hooks here, just a path check.
+ * Keeps hook call order stable regardless of which branch renders.
+ */
 export default function App() {
+  if (typeof window !== 'undefined' && window.location.pathname === '/auth/callback') {
+    return <AuthCallback />;
+  }
+  return <LandingApp />;
+}
+
+/** All landing-page + studio logic lives here so hooks always run in the same order. */
+function LandingApp() {
   const { theme, toggle: toggleTheme } = useTheme();
   const persist = usePersistentProjects();
   const { user, session, signOut } = useAuth();
