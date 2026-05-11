@@ -738,7 +738,10 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           .uploadAudio(persistedId, file, audioMeta, engine)
           .catch((err) => console.warn('[studio] audio upload failed silently:', err));
       }
-
+} catch (e: any) {
+      setStatus('error'); setError(e.message || 'Failed to decode audio.');
+    }
+  } 
   const play = async () => {
     if (!project || !audioCtxRef.current || !analyserRef.current) return;
     const ctx = audioCtxRef.current;
