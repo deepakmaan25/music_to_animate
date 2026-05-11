@@ -936,7 +936,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
-  };
+  };   
 
   // ─────────────────────────────────────────────────────────────────────────
   // Helpers
