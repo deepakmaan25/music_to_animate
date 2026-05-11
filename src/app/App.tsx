@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Sparkles, Wand2, Play, Download, Music, Palette, Layers, Zap,
@@ -183,6 +183,17 @@ function LandingApp() {
     persist.setLastOpened(id);
     setView('studio');
   };
+
+    const handleDeleteProject = useCallback(
+    async (id: string) => {
+      persist.deleteProject(id);
+      setCloudProjectIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
+      if (user?.id) {
+        await deleteDBProject(id);
+      }
+    },
+    [persist, user?.id]
+  );
 
   const filteredEngines = useMemo(() => {
     if (activeMood === 'All') return ENGINES;
