@@ -66,29 +66,36 @@ export function useSupabaseSync(userId: string | undefined) {
     [userId]
   );
 
-  const uploadAudio = useCallback(
-    async (
-      projectId: string,
-      file: File,
-      audioMeta: { name: string; duration: number; sampleRate?: number },
-      engineId: string
-    ): Promise<string | null> => {
-      console.log('[sync] uploadAudio called', { userId, projectId, fileName: file.name });
+const uploadAudio = useCallback(
+  async (
+    projectId: string,
+    file: File,
+    audioMeta: { name: string; duration: number; sampleRate?: number },
+    engineId: string
+  ): Promise<string | null> => {
+    // Get the user live at call time — avoids race where hook captured
+    // userId=undefined before the auth session was restored on page load
+    const { supabase } = await import('../lib/supabase');
+    const { data: { user: liveUser } } = await supabase.auth.getUser();
+    const resolvedUserId = liveUser?.id ?? userId;
 
-      if (!userId) {
-        console.warn('[sync] uploadAudio SKIPPED — userId is missing');
-        return null;
-      }
-      if (!projectId) {
-        console.warn('[sync] uploadAudio SKIPPED — projectId is missing');
-        return null;
-      }
+    console.log('[sync] uploadAudio called', { resolvedUserId, projectId, fileName: file.name });
+
+    if (!resolvedUserId) {
+      console.warn('[sync] uploadAudio SKIPPED — not signed in');
+      return null;
+    }
+    if (!projectId) {
+      console.warn('[sync] uploadAudio SKIPPED — projectId is missing');
+      return null;
+    }
+    
 
       const title = audioMeta.name.replace(/\.[^.]+$/, '') || 'Untitled';
 
       const projectOk = await upsertProject({
         id: projectId,
-        user_id: userId,
+        user_id: resolvedUserId,
         title,
         engine_id: engineId,
         style_config: {},
@@ -101,7 +108,7 @@ export function useSupabaseSync(userId: string | undefined) {
         return null;
       }
 
-      const storagePath = await uploadAudioFile(userId, projectId, file);
+      const storagePath = await uploadAudioFile(resolvedUserId, projectId, file);
       if (!storagePath) {
         console.error('[sync] uploadAudio — storage upload failed');
         return null;
@@ -109,7 +116,7 @@ export function useSupabaseSync(userId: string | undefined) {
 
       await upsertTrack({
         project_id: projectId,
-        user_id: userId,
+        user_id: resolvedUserId,
         storage_path: storagePath,
         filename: file.name,
         mime_type: file.type || 'audio/mpeg',
