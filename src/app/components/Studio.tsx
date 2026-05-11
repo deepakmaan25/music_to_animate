@@ -726,17 +726,19 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
  
         // Fire-and-forget: upload to Supabase if signed in
         // We use created.id directly (not the state variable) because state hasn't updated yet
-        supabaseSync
-          .uploadAudio(created.id, file, audioMeta, engine)
-          .catch((err) => console.warn('[studio] audio upload failed silently:', err));
+      supabaseSync
+  .uploadAudio(created.id, file, audioMeta, engine)
+  .then((path) => console.log('[studio] uploadAudio result:', path))
+  .catch((err) => console.error('[studio] uploadAudio ERROR:', err));
  
       } else if (persist && persistedId) {
         persist.updateProject(persistedId, { audioMeta });
  
         // Re-upload if user just signed in or track wasn't saved previously
-        supabaseSync
-          .uploadAudio(persistedId, file, audioMeta, engine)
-          .catch((err) => console.warn('[studio] audio upload failed silently:', err));
+    supabaseSync
+  .uploadAudio(persistedId, file, audioMeta, engine)
+  .then((path) => console.log('[studio] uploadAudio result:', path))
+  .catch((err) => console.error('[studio] uploadAudio ERROR:', err));
       }
 } catch (e: any) {
       setStatus('error'); setError(e.message || 'Failed to decode audio.');
@@ -989,6 +991,40 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           <Button variant="outline" onClick={onPickFile} className="border-white/20 text-white hover:bg-white/10">
             <Upload className="size-4 mr-2" /> Replace track
           </Button>
+
+          <Button
+  variant="outline"
+  className="border-yellow-400/40 text-yellow-300 hover:bg-yellow-400/10 text-xs"
+  onClick={async () => {
+    const { supabase } = await import('../lib/supabase');
+    const { data: { user: u } } = await supabase.auth.getUser();
+    console.log('=== DEBUG: auth user ===', u);
+    if (!u) { alert('Not signed in — no user found'); return; }
+
+    const testId = `debug_${Date.now()}`;
+    const { error } = await supabase.from('projects').upsert({
+      id: testId,
+      user_id: u.id,
+      title: 'Debug test row',
+      engine_id: 'bars',
+      style_config: {},
+      motion_config: {},
+      audio_meta: { name: 'test.mp3', duration: 0 },
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
+
+    if (error) {
+      console.error('=== DEBUG INSERT FAILED ===', error);
+      alert(`FAILED: ${error.message}\nCode: ${error.code}`);
+    } else {
+      console.log('=== DEBUG INSERT SUCCESS === id:', testId);
+      alert(`SUCCESS — check projects table for id: ${testId}`);
+    }
+  }}
+>
+  🐛 Test DB
+</Button>
+          
         </div>
       </div>
 
