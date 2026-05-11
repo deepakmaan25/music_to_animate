@@ -1,20 +1,6 @@
-/**
- * src/app/hooks/useSupabaseSync.ts
- *
- * Handles all Supabase persistence operations for the Studio:
- *   - Debounced project config autosave (1.5 s after last change)
- *   - Background audio file upload on track load
- *   - Export record creation + background blob upload
- *
- * All operations are fire-and-forget from the UI perspective.
- * If the user is signed out, every function is a silent no-op.
- */
-
 import { useCallback, useEffect, useRef } from 'react';
 import { upsertProject, upsertTrack, upsertExportRecord, patchExportRecord } from '../lib/db';
 import { uploadAudioFile, uploadExportBlob } from '../lib/storage';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 export type SyncableConfig = {
   engineId: string;
@@ -30,23 +16,13 @@ export type ExportSyncParams = {
   resolution: string;
   qualityPreset: string;
   durationSecs: number;
-  blob?: Blob;          // if provided, uploaded to Storage in background
+  blob?: Blob;
   sizeBytes?: number;
 };
 
-// ─── Hook ─────────────────────────────────────────────────────────────────────
-
-/**
- * @param userId  Current authenticated user's id. Pass undefined when signed out.
- *
- * All returned functions accept an explicit `projectId` so they stay stable
- * regardless of which project is currently open.
- */
 export function useSupabaseSync(userId: string | undefined) {
-  // Map of projectId → pending debounce timer
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  // Clean up all pending timers on unmount
   useEffect(() => {
     return () => {
       timersRef.current.forEach((t) => clearTimeout(t));
@@ -54,24 +30,26 @@ export function useSupabaseSync(userId: string | undefined) {
     };
   }, []);
 
-  // ── Debounced config save ──────────────────────────────────────────────────
-
-  /**
-   * Call on every param change (engine, palette, sliders…).
-   * Coalesces rapid consecutive calls into a single DB write after 1.5 s of silence.
-   */
   const saveConfig = useCallback(
     (projectId: string, config: SyncableConfig) => {
-      if (!userId || !projectId) return;
+      console.log('[sync] saveConfig called', { userId, projectId });
 
-      // Cancel any pending write for this project
+      if (!userId) {
+        console.warn('[sync] saveConfig SKIPPED — userId is missing');
+        return;
+      }
+      if (!projectId) {
+        console.warn('[sync] saveConfig SKIPPED — projectId is missing');
+        return;
+      }
+
       const existing = timersRef.current.get(projectId);
       if (existing) clearTimeout(existing);
 
       const timer = setTimeout(async () => {
         timersRef.current.delete(projectId);
         const title = config.audioMeta.name.replace(/\.[^.]+$/, '') || 'Untitled';
-        await upsertProject({
+        const ok = await upsertProject({
           id: projectId,
           user_id: userId,
           title,
@@ -80,7 +58,7 @@ export function useSupabaseSync(userId: string | undefined) {
           motion_config: config.motion as Record<string, unknown>,
           audio_meta: config.audioMeta,
         });
-        console.debug('[sync] config saved', projectId);
+        console.log('[sync] saveConfig debounced write result:', ok);
       }, 1500);
 
       timersRef.current.set(projectId, timer);
@@ -88,15 +66,6 @@ export function useSupabaseSync(userId: string | undefined) {
     [userId]
   );
 
-  // ── Audio upload ───────────────────────────────────────────────────────────
-
-  /**
-   * Upload the audio file to Supabase Storage and create/upsert the project
-   * and track rows. Called once when a new file is decoded in Studio.
-   *
-   * Returns the storage path on success, null on failure or when signed out.
-   * This is intentionally async — await it or fire-and-forget.
-   */
   const uploadAudio = useCallback(
     async (
       projectId: string,
@@ -104,10 +73,19 @@ export function useSupabaseSync(userId: string | undefined) {
       audioMeta: { name: string; duration: number; sampleRate?: number },
       engineId: string
     ): Promise<string | null> => {
-      if (!userId || !projectId) return null;
+      console.log('[sync] uploadAudio called', { userId, projectId, fileName: file.name });
 
-      // 1. Ensure project row exists before the FK'd track row
+      if (!userId) {
+        console.warn('[sync] uploadAudio SKIPPED — userId is missing');
+        return null;
+      }
+      if (!projectId) {
+        console.warn('[sync] uploadAudio SKIPPED — projectId is missing');
+        return null;
+      }
+
       const title = audioMeta.name.replace(/\.[^.]+$/, '') || 'Untitled';
+
       const projectOk = await upsertProject({
         id: projectId,
         user_id: userId,
@@ -117,13 +95,18 @@ export function useSupabaseSync(userId: string | undefined) {
         motion_config: {},
         audio_meta: audioMeta,
       });
-      if (!projectOk) return null;
 
-      // 2. Upload file to Storage
+      if (!projectOk) {
+        console.error('[sync] uploadAudio — project upsert failed, aborting track upload');
+        return null;
+      }
+
       const storagePath = await uploadAudioFile(userId, projectId, file);
-      if (!storagePath) return null;
+      if (!storagePath) {
+        console.error('[sync] uploadAudio — storage upload failed');
+        return null;
+      }
 
-      // 3. Upsert track row (project_id is PK — safe to call repeatedly)
       await upsertTrack({
         project_id: projectId,
         user_id: userId,
@@ -134,35 +117,23 @@ export function useSupabaseSync(userId: string | undefined) {
         duration: audioMeta.duration,
       });
 
-      console.debug('[sync] audio uploaded', storagePath);
+      console.log('[sync] uploadAudio COMPLETE — path:', storagePath);
       return storagePath;
     },
     [userId]
   );
 
-  // ── Export save ────────────────────────────────────────────────────────────
-
-  /**
-   * Create an export record in the DB and (optionally) upload the blob to Storage.
-   * The blob upload is background — it does NOT need to complete before the
-   * browser's local download is offered to the user.
-   */
   const saveExport = useCallback(
     async (projectId: string, params: ExportSyncParams): Promise<void> => {
-      if (!userId || !projectId) return;
+      console.log('[sync] saveExport called', { userId, projectId, exportId: params.exportId });
 
-      const {
-        exportId,
-        exportType,
-        aspectRatio,
-        resolution,
-        qualityPreset,
-        durationSecs,
-        blob,
-        sizeBytes,
-      } = params;
+      if (!userId || !projectId) {
+        console.warn('[sync] saveExport SKIPPED — missing userId or projectId');
+        return;
+      }
 
-      // Insert record immediately with status 'ready'
+      const { exportId, exportType, aspectRatio, resolution, qualityPreset, durationSecs, blob, sizeBytes } = params;
+
       await upsertExportRecord({
         id: exportId,
         user_id: userId,
@@ -172,22 +143,20 @@ export function useSupabaseSync(userId: string | undefined) {
         resolution,
         quality_preset: qualityPreset,
         duration_secs: durationSecs,
-        storage_path: undefined,  // filled in below if upload succeeds
+        storage_path: undefined,
         size_bytes: sizeBytes,
         status: 'ready',
       });
 
-      // Upload blob in the background (don't block)
       if (blob) {
         uploadExportBlob(userId, projectId, exportId, blob, exportType as 'webm' | 'mp4')
           .then((storagePath) => {
             if (storagePath) {
-              // Patch the record with the final storage path
               patchExportRecord(exportId, { storage_path: storagePath });
-              console.debug('[sync] export blob uploaded', storagePath);
+              console.log('[sync] export blob uploaded to:', storagePath);
             }
           })
-          .catch((err) => console.warn('[sync] export blob upload failed:', err));
+          .catch((err) => console.error('[sync] export blob upload failed:', err));
       }
     },
     [userId]
