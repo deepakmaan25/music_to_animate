@@ -9,6 +9,8 @@ import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import type { usePersistentProjects } from '../hooks/usePersistentProjects';
+import { useAuth } from '../hooks/useAuth';
+   import { useSupabaseSync } from '../hooks/useSupabaseSync';
 
 // ─── Platform helpers ────────────────────────────────────────────────────────
 function isIOSDevice(): boolean {
@@ -176,6 +178,9 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const solarTRef  = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
 
+   const { user } = useAuth();
+  const supabaseSync = useSupabaseSync(user?.id);
+  
   // ── Export mode (platform-aware, computed once) ────────────────────────────
   const exportMode = useMemo(() => getExportMode(), []);
 
@@ -209,6 +214,20 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       motion: { beatSensitivity, particleDensity, smoothing },
     });
   }, [engine, palette, beatSensitivity, particleDensity, smoothing, persistedId, persist]);
+
+   // Supabase autosave — debounced 1.5 s, runs in parallel with local persist
+  useEffect(() => {
+    if (!persistedId || !project) return;
+    supabaseSync.saveConfig(persistedId, {
+      engineId: engine,
+      style: { palette },
+      motion: { beatSensitivity, particleDensity, smoothing },
+      audioMeta: { name: project.fileName, duration: project.duration },
+    });
+  // supabaseSync is stable (useCallback with userId dep) — safe to include
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, palette, beatSensitivity, particleDensity, smoothing, persistedId, project?.fileName, supabaseSync]);
+  
 
   // ── Redraw static frame when params change ─────────────────────────────────
   // (runs AFTER sync effects above, so refs are already up-to-date)
@@ -699,18 +718,26 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       analyser.connect(gain).connect(ctx.destination);
       const newProj: Project = { id: `prj_${Date.now()}`, fileName: file.name, duration: audioBuffer.duration, audioBuffer, engine: initialEngine };
       setProject(newProj); setStatus('ready');
+       const audioMeta = { name: file.name, duration: audioBuffer.duration, sampleRate: audioBuffer.sampleRate };
+ 
       if (persist && !persistedId) {
-        const created = persist.createProject(
-          { name: file.name, duration: audioBuffer.duration, sampleRate: audioBuffer.sampleRate }, engine
-        );
+        const created = persist.createProject(audioMeta, engine);
         setPersistedId(created.id);
+ 
+        // Fire-and-forget: upload to Supabase if signed in
+        // We use created.id directly (not the state variable) because state hasn't updated yet
+        supabaseSync
+          .uploadAudio(created.id, file, audioMeta, engine)
+          .catch((err) => console.warn('[studio] audio upload failed silently:', err));
+ 
       } else if (persist && persistedId) {
-        persist.updateProject(persistedId, { audioMeta: { name: file.name, duration: audioBuffer.duration, sampleRate: audioBuffer.sampleRate } });
+        persist.updateProject(persistedId, { audioMeta });
+ 
+        // Re-upload if user just signed in or track wasn't saved previously
+        supabaseSync
+          .uploadAudio(persistedId, file, audioMeta, engine)
+          .catch((err) => console.warn('[studio] audio upload failed silently:', err));
       }
-    } catch (e: any) {
-      setStatus('error'); setError(e.message || 'Failed to decode audio.');
-    }
-  }
 
   const play = async () => {
     if (!project || !audioCtxRef.current || !analyserRef.current) return;
@@ -857,14 +884,41 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       try { src.stop(); } catch {}
       playingRef.current = false; setPlaying(false);
     };
-    recorder.onstop = () => {
+       recorder.onstop = () => {
       const ext  = exportMode === 'mp4' ? 'mp4' : 'webm';
       const type = exportMode === 'mp4' ? 'video/mp4' : 'video/webm';
       const blob = new Blob(chunks, { type });
       const url  = URL.createObjectURL(blob);
-      setExports((x) => x.map((j) => j.id === job.id ? { ...j, status: 'done', progress: 100, url, blob, size: blob.size } : j));
-      if (persist && persistedId) persist.updateExport(persistedId, String(job.id), { status: 'ready', sizeBytes: blob.size });
+ 
+      setExports((x) =>
+        x.map((j) =>
+          j.id === job.id ? { ...j, status: 'done', progress: 100, url, blob, size: blob.size } : j
+        )
+      );
+ 
+      // Local persist (existing)
+      if (persist && persistedId) {
+        persist.updateExport(persistedId, String(job.id), { status: 'ready', sizeBytes: blob.size });
+      }
+ 
+      // Supabase persist (new) — fire-and-forget, does NOT block the download
+      if (persistedId) {
+        const preset = PRESETS.find((p) => p.id === presetId);
+        supabaseSync
+          .saveExport(persistedId, {
+            exportId: String(job.id),
+            exportType: ext as 'webm' | 'mp4',
+            aspectRatio: aspect,
+            resolution: preset ? `${preset.w}x${preset.h}` : '',
+            qualityPreset: preset?.name ?? presetId,
+            durationSecs: clipDuration === 'full' ? Math.min(project?.duration ?? 0, 180) : (clipDuration as number),
+            blob,          // will be uploaded to Storage in background
+            sizeBytes: blob.size,
+          })
+          .catch((err) => console.warn('[studio] export save failed silently:', err));
+      }
     };
+    
     recorder.start(200);
 
     const startedAt = performance.now();
@@ -914,6 +968,15 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           </Button>
           <div>
             <div className="text-sm font-semibold">{project?.fileName || 'New project'}</div>
+            {user && (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded ml-1"
+                style={{ background: 'rgba(16,185,129,0.12)', color: 'rgb(16,185,129)' }}
+                title="Saving changes to your account"
+              >
+                ☁ auto-saving
+              </span>
+            )}
             <div className="text-xs text-gray-400">
               {project ? `${fmt(project.duration)} · ${ENGINES.find((e) => e.id === engine)!.name}` : 'No track loaded'}
             </div>
