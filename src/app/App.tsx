@@ -13,6 +13,7 @@ import { useTheme } from './hooks/useTheme';
 import { usePersistentProjects, type StoredProject } from './hooks/usePersistentProjects';
 import { useAuth } from './hooks/useAuth';
 import { SERVER_URL, ANON_KEY } from './lib/supabase';
+import { fetchUserProjects, deleteDBProject, dbProjectToStored } from './lib/db';
 
 type EngineId = 'bars' | 'radial' | 'depth' | 'orbital' | 'terrain' | 'tunnel' | 'neon_spheres' | 'fractal' | 'solar';
 type StudioEngine = 'bars' | 'radial' | 'depth' | 'orbital' | 'terrain' | 'tunnel' | 'neon_spheres' | 'fractal' | 'solar';
@@ -114,47 +115,40 @@ function LandingApp() {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
 
   // On login, push local projects to server + pull remote ones
+   // Track which project IDs are confirmed synced to Supabase
+  const [cloudProjectIds, setCloudProjectIds] = useState<Set<string>>(new Set());
+ 
   useEffect(() => {
-    if (!session?.access_token || !user) return;
+    if (!user?.id) return;
     let cancelled = false;
+ 
     (async () => {
       setSyncStatus('syncing');
       try {
-        const headers = {
-          Authorization: `Bearer ${session.access_token}`,
-          apikey: ANON_KEY,
-          'Content-Type': 'application/json'
-        };
-        // Push local projects
-        const local = Object.values(persist.projects);
-        await Promise.all(
-          local.map((p) =>
-            fetch(`${SERVER_URL}/projects/${p.id}`, {
-              method: 'PUT',
-              headers,
-              body: JSON.stringify(p)
-            })
-          )
-        );
-        // Pull remote
-        const res = await fetch(`${SERVER_URL}/projects`, { headers });
-        if (res.ok) {
-          const { projects: remote } = await res.json();
-          if (!cancelled && Array.isArray(remote)) {
-            for (const r of remote as StoredProject[]) {
-              persist.importProject(r);
-            }
+        // Pull the user's projects from Supabase DB
+        const dbProjects = await fetchUserProjects(user.id);
+ 
+        if (!cancelled) {
+          const ids = new Set<string>();
+          for (const p of dbProjects) {
+            // Merge into local store (importProject skips if id already exists)
+            persist.importProject(dbProjectToStored(p));
+            ids.add(p.id);
           }
+          setCloudProjectIds(ids);
+          setSyncStatus('synced');
         }
-        if (!cancelled) setSyncStatus('synced');
       } catch (e) {
-        console.log('Project sync failed:', e);
+        console.error('[sync] project fetch failed:', e);
         if (!cancelled) setSyncStatus('error');
       }
     })();
+ 
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.access_token, user?.id]);
+    // NOTE: we only sync on login (user.id change), not on every session token refresh
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+  
 
    const isIOS = useMemo(() => {
     if (typeof navigator === 'undefined') return false;
@@ -395,8 +389,14 @@ function LandingApp() {
                 </span>
               </div>
               <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {projectList.slice(0, 6).map((p) => (
-                  <ProjectCard key={p.id} project={p} onOpen={() => openExisting(p.id)} onDelete={() => persist.deleteProject(p.id)} />
+               {projectList.slice(0, 6).map((p) => (
+                  <ProjectCard
+                    key={p.id}
+                    project={p}
+                    isSynced={cloudProjectIds.has(p.id)}
+                    onOpen={() => openExisting(p.id)}
+                    onDelete={() => handleDeleteProject(p.id)}
+                  />
                 ))}
               </div>
             </motion.div>
@@ -678,16 +678,26 @@ function EngineCard({ engine, onUse }: { engine: typeof ENGINES[number]; onUse: 
 }
 
 function ProjectCard({
-  project, onOpen, onDelete
-}: { project: StoredProject; onOpen: () => void; onDelete: () => void }) {
-  const fmt = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+  project,
+  isSynced,
+  onOpen,
+  onDelete,
+}: {
+  project: StoredProject;
+  isSynced: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const fmt = (s: number) =>
+    `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
   const exportCount = Object.keys(project.exports).length;
+ 
   return (
     <div
       className="group p-4 rounded-xl border flex items-center gap-3 cursor-pointer transition-all hover:translate-y-[-2px]"
       style={{
         background: 'var(--surface-elevated)',
-        borderColor: 'var(--surface-glass-border)'
+        borderColor: 'var(--surface-glass-border)',
       }}
       onClick={onOpen}
     >
@@ -697,14 +707,27 @@ function ProjectCard({
       >
         <Music className="size-4" />
       </div>
+ 
       <div className="flex-1 min-w-0">
-        <div className="font-medium text-sm truncate" style={{ color: 'var(--text-strong)' }}>
+        <div className="font-medium text-sm truncate flex items-center gap-1.5" style={{ color: 'var(--text-strong)' }}>
           {project.audioMeta.name}
+          {/* Cloud sync badge */}
+          {isSynced && (
+            <span
+              title="Saved to your account"
+              className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded"
+              style={{ background: 'rgba(16,185,129,0.12)', color: 'rgb(16,185,129)' }}
+            >
+              <Cloud className="size-2.5" />
+              synced
+            </span>
+          )}
         </div>
         <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
           {fmt(project.audioMeta.duration)} · {exportCount} export{exportCount === 1 ? '' : 's'}
         </div>
       </div>
+ 
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         className="opacity-0 group-hover:opacity-100 size-8 rounded-md flex items-center justify-center transition-opacity"
