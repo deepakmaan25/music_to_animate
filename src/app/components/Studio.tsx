@@ -177,6 +177,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const cameraTRef = useRef(0);
   const solarTRef  = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const pendingUploadRef = useRef<{ file: File; audioMeta: { name: string; duration: number; sampleRate?: number }; engineId: string } | null>(null);  // ADD THIS
+
 
    const { user } = useAuth();
   const supabaseSync = useSupabaseSync(user?.id);
@@ -215,7 +217,23 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     });
   }, [engine, palette, beatSensitivity, particleDensity, smoothing, persistedId, persist]);
 
-   // Supabase autosave — debounced 1.5 s, runs in parallel with local persist
+// Fire pending audio upload the moment user signs in / session restores
+  useEffect(() => {
+    if (!user?.id || !persistedId || !pendingUploadRef.current) return;
+
+    const pending = pendingUploadRef.current;
+    pendingUploadRef.current = null;
+
+    console.log('[studio] user now available — firing pending upload for:', persistedId);
+
+    supabaseSync
+      .uploadAudio(persistedId, pending.file, pending.audioMeta, pending.engineId)
+      .then((path) => console.log('[studio] pending upload result:', path))
+      .catch((err) => console.error('[studio] pending upload ERROR:', err));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, persistedId]);
+
+  // Supabase autosave — debounced 1.5 s, runs in parallel with local persist
   useEffect(() => {
     if (!persistedId || !project) return;
     supabaseSync.saveConfig(persistedId, {
@@ -224,7 +242,6 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       motion: { beatSensitivity, particleDensity, smoothing },
       audioMeta: { name: project.fileName, duration: project.duration },
     });
-  // supabaseSync is stable (useCallback with userId dep) — safe to include
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, palette, beatSensitivity, particleDensity, smoothing, persistedId, project?.fileName, supabaseSync]);
   
@@ -726,19 +743,29 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
  
         // Fire-and-forget: upload to Supabase if signed in
         // We use created.id directly (not the state variable) because state hasn't updated yet
-      supabaseSync
-  .uploadAudio(created.id, file, audioMeta, engine)
-  .then((path) => console.log('[studio] uploadAudio result:', path))
-  .catch((err) => console.error('[studio] uploadAudio ERROR:', err));
+if (user?.id) {
+  supabaseSync
+    .uploadAudio(created.id, file, audioMeta, engine)
+    .then((path) => console.log('[studio] uploadAudio result:', path))
+    .catch((err) => console.error('[studio] uploadAudio ERROR:', err));
+} else {
+  console.log('[studio] user not ready yet — storing pending upload for project:', created.id);
+  pendingUploadRef.current = { file, audioMeta, engineId: engine };
+}
  
       } else if (persist && persistedId) {
         persist.updateProject(persistedId, { audioMeta });
  
         // Re-upload if user just signed in or track wasn't saved previously
-    supabaseSync
-  .uploadAudio(persistedId, file, audioMeta, engine)
-  .then((path) => console.log('[studio] uploadAudio result:', path))
-  .catch((err) => console.error('[studio] uploadAudio ERROR:', err));
+   if (user?.id) {
+  supabaseSync
+    .uploadAudio(persistedId, file, audioMeta, engine)
+    .then((path) => console.log('[studio] uploadAudio result:', path))
+    .catch((err) => console.error('[studio] uploadAudio ERROR:', err));
+} else {
+  console.log('[studio] user not ready yet — storing pending upload for project:', persistedId);
+  pendingUploadRef.current = { file, audioMeta, engineId: engine };
+}
       }
 } catch (e: any) {
       setStatus('error'); setError(e.message || 'Failed to decode audio.');
