@@ -55,7 +55,6 @@ export function useSupabaseSync(userId: string | undefined) {
           motion_config: config.motion as Record<string, unknown>,
           audio_meta: config.audioMeta,
         });
-        console.log('[sync] saveConfig debounced write result:', ok);
       }, 1500);
 
       timersRef.current.set(projectId, timer);
@@ -126,8 +125,7 @@ const uploadAudio = useCallback(
 
   const saveExport = useCallback(
     async (projectId: string, params: ExportSyncParams): Promise<void> => {
-      console.log('[sync] saveExport called', { userId, projectId, exportId: params.exportId });
-
+  
       if (!userId || !projectId) {
         return;
       }
