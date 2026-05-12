@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState, } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import {
-  Play, Pause, Upload, Download, ArrowLeft, RotateCw, FileVideo, Check,
-  Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff
-} from 'lucide-react';
+import { Play, Pause, Upload, Download, ArrowLeft, RotateCw, FileVideo, Check,
+        Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff, Cloud } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
@@ -1061,96 +1059,95 @@ if (user?.id) {
   // ─────────────────────────────────────────────────────────────────────────
   // JSX
   // ─────────────────────────────────────────────────────────────────────────
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-black via-gray-950 to-black text-white">
-      <input ref={fileInputRef} type="file" accept="audio/*" hidden onChange={onFileChange} />
 
-      {/* Top bar */}
-      <div className="border-b border-white/10 px-6 py-4 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" onClick={onBack} className="text-gray-200 hover:bg-white/10">
-            <ArrowLeft className="size-4 mr-2" /> Back
+ return (
+    <div className="h-screen flex flex-col bg-gradient-to-b from-black via-gray-950 to-black text-white overflow-hidden">
+ 
+      {/* ── Top bar (fixed height) ──────────────────────────────── */}
+      <div className="shrink-0 border-b border-white/10 px-4 py-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <Button variant="ghost" onClick={onBack} className="text-gray-200 hover:bg-white/10 shrink-0 h-8 px-2">
+            <ArrowLeft className="size-4 mr-1.5" /> Back
           </Button>
-          <div>
-            <div className="text-sm font-semibold">{project?.fileName || 'New project'}</div>
-             {user && (
-              <span
-                className="text-[10px] px-1.5 py-0.5 rounded"
-                style={{
-                  background: uploadingToCloud
-                    ? 'rgba(251,191,36,0.12)'
-                    : 'rgba(16,185,129,0.12)',
-                  color: uploadingToCloud
-                    ? 'rgb(251,191,36)'
-                    : 'rgb(16,185,129)',
-                }}
-                title={uploadingToCloud ? 'Uploading audio to your account...' : 'Saved to your account'}
-              >
-                {uploadingToCloud ? '⏫ uploading...' : '☁ synced'}
-              </span>
-            )}
-            
-            <div className="text-xs text-gray-400">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold truncate flex items-center gap-2">
+              {project?.fileName || 'New project'}
+              {user && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                  style={{
+                    background: uploadingToCloud ? 'rgba(251,191,36,0.12)' : 'rgba(16,185,129,0.12)',
+                    color: uploadingToCloud ? 'rgb(251,191,36)' : 'rgb(16,185,129)',
+                  }}>
+                  {uploadingToCloud ? '⏫ uploading' : '☁ synced'}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-gray-400 truncate">
               {project ? `${fmt(project.duration)} · ${ENGINES.find((e) => e.id === engine)!.name}` : 'No track loaded'}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={onPickFile} className="border-white/20 text-white hover:bg-white/10">
-            <Upload className="size-4 mr-2" /> Replace track
-          </Button>
-      
-        </div>
+        <Button variant="outline" onClick={onPickFile} className="border-white/20 text-white hover:bg-white/10 shrink-0 h-8 text-xs">
+          <Upload className="size-3.5 mr-1.5" /> Replace track
+        </Button>
       </div>
-
-      <div className="grid lg:grid-cols-[1fr_360px] gap-6 p-6">
-        {/* Preview column */}
-        <div className="space-y-4">
-          <Card className="bg-black border-white/10 overflow-hidden relative">
+ 
+      {/* ── Main content (fills remaining viewport) ─────────────── */}
+      <div className="flex-1 grid lg:grid-cols-[1fr_360px] min-h-0 overflow-hidden">
+ 
+        {/* Left: canvas + transport (no scroll) */}
+        <div className="flex flex-col min-h-0 p-4 gap-3 overflow-hidden">
+ 
+          {/* Canvas — grows to fill, constrained by aspect ratio */}
+          <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-black border border-white/10">
             <AnimatePresence>
               {status === 'decoding' && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   className="absolute inset-0 z-10 bg-black/80 flex flex-col items-center justify-center gap-3">
-                  <Loader2 className="size-8 animate-spin text-purple-400" />
+                  <Loader2 className="size-7 animate-spin text-purple-400" />
                   <div className="text-sm">Analyzing audio…</div>
                 </motion.div>
               )}
               {status === 'error' && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                   className="absolute inset-0 z-10 bg-black/85 flex flex-col items-center justify-center gap-3 p-6 text-center">
-                  <AlertCircle className="size-8 text-red-400" />
-                  <div className="font-semibold">Couldn't read this file</div>
-                  <div className="text-sm text-gray-400 max-w-md">{error}</div>
-                  <Button onClick={onPickFile} className="bg-white text-gray-900 hover:bg-gray-100">
-                    <RotateCw className="size-4 mr-2" /> Try another file
+                  <AlertCircle className="size-7 text-red-400" />
+                  <div className="font-semibold text-sm">Couldn't read this file</div>
+                  <div className="text-xs text-gray-400 max-w-sm">{error}</div>
+                  <Button onClick={onPickFile} size="sm" className="bg-white text-gray-900 hover:bg-gray-100">
+                    <RotateCw className="size-3.5 mr-1.5" /> Try another file
                   </Button>
                 </motion.div>
               )}
               {status === 'idle' && !project && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                  className="absolute inset-0 z-10 bg-black/70 flex flex-col items-center justify-center gap-3 p-6 text-center">
-                  <Upload className="size-8 text-gray-300" />
-                  <div className="font-semibold">No track loaded</div>
-                  <Button onClick={onPickFile} className="bg-white text-gray-900 hover:bg-gray-100">
-                    Upload Your Track
+                  className="absolute inset-0 z-10 bg-black/70 flex flex-col items-center justify-center gap-3 text-center">
+                  <Upload className="size-7 text-gray-300" />
+                  <div className="font-semibold text-sm">No track loaded</div>
+                  <Button onClick={onPickFile} size="sm" className="bg-white text-gray-900 hover:bg-gray-100">
+                    Upload a track
                   </Button>
                 </motion.div>
               )}
             </AnimatePresence>
-            <canvas ref={canvasRef} className="w-full h-auto block" style={{ aspectRatio: aspect.replace(':', '/') }} />
-          </Card>
-
-          {/* Transport */}
-          <Card className="bg-white/5 border-white/10 backdrop-blur-sm p-4">
-            <div className="flex items-center gap-4 flex-wrap">
+            {/* Canvas fills parent, aspect ratio maintained by CSS */}
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 w-full h-full object-contain"
+            />
+          </div>
+ 
+          {/* Transport bar (fixed height) */}
+          <div className="shrink-0 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5">
+            <div className="flex items-center gap-3">
               <Button size="icon" disabled={!project} onClick={() => (playing ? pause() : play())}
-                className="rounded-full size-10 bg-white text-gray-900 hover:bg-gray-100 disabled:opacity-40">
-                {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
+                className="rounded-full size-9 bg-white text-gray-900 hover:bg-gray-100 disabled:opacity-40 shrink-0">
+                {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
               </Button>
-              <div className="text-xs text-gray-300 tabular-nums min-w-[80px]">
+              <div className="text-xs text-gray-300 tabular-nums shrink-0 min-w-[70px]">
                 {fmt(currentTime)} / {fmt(project?.duration ?? 0)}
               </div>
-              <div className="flex-1 relative h-8 cursor-pointer"
+              <div className="flex-1 relative h-7 cursor-pointer"
                 onClick={(e) => {
                   if (!project) return;
                   const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
@@ -1161,35 +1158,210 @@ if (user?.id) {
                 <div className="absolute top-1/2 -translate-y-1/2 size-3 -ml-1.5 rounded-full bg-white shadow" style={{ left: `${pct}%` }} />
               </div>
             </div>
-          </Card>
-
-          {/* Exports list */}
-          {exports.length > 0 && (
-            <div>
-              <h3 className="text-lg font-semibold mb-3">Exports</h3>
-              <div className="space-y-2">
-                {exports.map((j) => {
-                  const ext = j.name.includes('mp4') ? 'mp4' : exportMode === 'mp4' ? 'mp4' : 'webm';
-                  return (
-                    <Card key={j.id} className="bg-white/5 border-white/10 p-3 flex items-center gap-3 flex-wrap">
-                      <div className="size-9 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
-                        <FileVideo className="size-4" />
-                      </div>
-                      <div className="flex-1 min-w-[180px]">
-                        <div className="text-sm font-semibold">{j.name}.{ext}</div>
-                        <div className="text-xs text-gray-400">{j.preset} · {j.aspect}{j.size ? ` · ${(j.size / (1024 * 1024)).toFixed(1)} MB` : ''}</div>
-                        {j.status === 'error' && j.errorMsg && (
-                          <div className="text-xs text-red-400 mt-1 flex items-center gap-1">
-                            <CloudOff className="size-3 shrink-0" /> {j.errorMsg}
+          </div>
+        </div>
+ 
+        {/* Right: tabbed control panel (scrollable within itself) */}
+        <div className="border-l border-white/10 flex flex-col min-h-0 overflow-hidden">
+          <Tabs defaultValue="style" className="flex flex-col h-full">
+            <TabsList className="grid grid-cols-5 w-full bg-white/5 rounded-none border-b border-white/10 shrink-0 h-10">
+              <TabsTrigger value="style" className="text-xs">Style</TabsTrigger>
+              <TabsTrigger value="motion" className="text-xs">Motion</TabsTrigger>
+              <TabsTrigger value="color" className="text-xs">Color</TabsTrigger>
+              <TabsTrigger value="export" className="text-xs">Export</TabsTrigger>
+              <TabsTrigger value="exports" className="text-xs">History</TabsTrigger>
+            </TabsList>
+ 
+            {/* Each tab content is scrollable */}
+            <div className="flex-1 overflow-y-auto">
+ 
+              {/* ── Style ───────────────────────────────────────── */}
+              <TabsContent value="style" className="p-4 space-y-4 mt-0">
+                {(['2D', '3D'] as const).map((group) => (
+                  <div key={group} className="space-y-1.5">
+                    <div className="text-[10px] uppercase tracking-wider text-gray-400 flex items-center gap-2 px-1">
+                      {group === '3D' ? '3D · Immersive' : 'Classic'}
+                      {group === '3D' && <span className="px-1.5 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-200 border border-purple-400/30">NEW</span>}
+                    </div>
+                    {ENGINES.filter((e) => e.group === group).map((e) => (
+                      <button key={e.id} onClick={() => setEngine(e.id)}
+                        className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all text-xs ${engine === e.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
+                        <div className="font-semibold">{e.name}</div>
+                        <div className={`text-[11px] mt-0.5 ${engine === e.id ? 'text-gray-600' : 'text-gray-400'}`}>{e.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </TabsContent>
+ 
+              {/* ── Motion ──────────────────────────────────────── */}
+              <TabsContent value="motion" className="p-4 space-y-5 mt-0">
+                <Slider label="Beat sensitivity" value={beatSensitivity} onChange={setBeatSensitivity} min={0} max={1} step={0.01} />
+                <Slider label="Particle density" value={particleDensity} onChange={setParticleDensity} min={0} max={1} step={0.01} />
+                <Slider label="Smoothing" value={smoothing} onChange={setSmoothing} min={0} max={0.95} step={0.01} />
+                {engine === 'depth' && (
+                  <div className="space-y-4 border-t border-white/10 pt-4">
+                    <div className="text-[10px] uppercase tracking-wider text-purple-300">Depth Field</div>
+                    <Slider label="Base travel speed" value={baseSpeed} onChange={setBaseSpeed} min={0} max={1} step={0.01} />
+                    <Slider label="Beat responsiveness" value={beatResponse} onChange={setBeatResponse} min={0} max={1} step={0.01} />
+                  </div>
+                )}
+                <label className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10 cursor-pointer">
+                  <div>
+                    <div className="text-xs font-medium">Performance mode</div>
+                    <div className="text-[11px] text-gray-400 mt-0.5">Reduces detail for low-power devices.</div>
+                  </div>
+                  <input type="checkbox" checked={perfMode} onChange={(e) => setPerfMode(e.target.checked)} className="size-4 accent-purple-500" />
+                </label>
+              </TabsContent>
+ 
+              {/* ── Color ───────────────────────────────────────── */}
+              <TabsContent value="color" className="p-4 space-y-2 mt-0">
+                <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-3">Palette</div>
+                {PALETTES.map((p, i) => (
+                  <button key={p.name} onClick={() => setPalette(i)}
+                    className={`w-full flex items-center gap-3 p-2.5 rounded-lg border transition-all ${palette === i ? 'bg-white/15 border-white/40' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
+                    <div className="flex gap-1">
+                      {p.colors.map((c) => <span key={c} className="size-5 rounded" style={{ background: c }} />)}
+                    </div>
+                    <span className="text-xs flex-1 text-left">{p.name}</span>
+                    {palette === i && <Check className="size-3.5 text-emerald-400" />}
+                  </button>
+                ))}
+              </TabsContent>
+ 
+              {/* ── Export (settings) ───────────────────────────── */}
+              <TabsContent value="export" className="p-4 space-y-4 mt-0">
+                <div className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${exportMode === 'server' ? 'bg-amber-500/10 border-amber-400/30 text-amber-300' : 'bg-white/5 border-white/10 text-gray-300'}`}>
+                  {exportMode === 'webm' && <Monitor className="size-3 text-emerald-400 shrink-0" />}
+                  {exportMode === 'mp4' && <Smartphone className="size-3 text-blue-400 shrink-0" />}
+                  {exportMode === 'server' && <AlertCircle className="size-3 text-amber-400 shrink-0" />}
+                  {exportModeLabel}
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Aspect ratio</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {ASPECTS.map((a) => (
+                      <button key={a.id} onClick={() => setAspect(a.id)}
+                        className={`p-2 rounded-lg border text-left ${aspect === a.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
+                        <div className="font-semibold text-xs">{a.label}</div>
+                        <div className="text-[10px] opacity-70">{a.sub}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Clip duration</div>
+                  <div className="flex gap-2 flex-wrap">
+                    {(['full', 15, 30, 60] as const).map((d) => (
+                      <button key={String(d)} onClick={() => setClipDuration(d)}
+                        className={`px-3 py-1.5 rounded-lg border text-xs ${clipDuration === d ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
+                        {d === 'full' ? 'Full' : `${d}s`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Quality</div>
+                  <div className="space-y-1.5">
+                    {PRESETS.map((p) => (
+                      <button key={p.id} onClick={() => setPresetId(p.id)}
+                        className={`w-full text-left p-2.5 rounded-lg border text-xs ${presetId === p.id ? 'bg-white/15 border-white/40 ring-1 ring-white/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
+                        <div className="font-semibold">{p.name}</div>
+                        <div className="text-gray-400 text-[11px]">{p.label}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <Button disabled={!project || status !== 'ready' || exportMode === 'server'}
+                  onClick={startExport}
+                  className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:opacity-50">
+                  <FileVideo className="size-4 mr-2" /> Start export
+                </Button>
+                {exportMode === 'server' && (
+                  <p className="text-xs text-amber-400/80">Use Chrome or Firefox on desktop for recording.</p>
+                )}
+              </TabsContent>
+ 
+              {/* ── Exports history ─────────────────────────────── */}
+              <TabsContent value="exports" className="p-4 mt-0">
+                <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-3">Export history</div>
+                {exports.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-center">
+                    <FileVideo className="size-8 text-gray-600 mb-3" />
+                    <p className="text-xs text-gray-400">No exports yet</p>
+                    <p className="text-[11px] text-gray-500 mt-1">Use the Export tab to render your first video</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {exports.map((j) => {
+                      const ext = exportMode === 'mp4' ? 'mp4' : 'webm';
+                      return (
+                        <div key={j.id} className="rounded-xl border bg-white/5 border-white/10 p-3">
+                          <div className="flex items-start gap-2.5 mb-2">
+                            <div className="size-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center shrink-0">
+                              <FileVideo className="size-3.5" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-semibold truncate">{j.name}.{ext}</div>
+                              <div className="text-[11px] text-gray-400">{j.preset} · {j.aspect}{j.size ? ` · ${(j.size / (1024 * 1024)).toFixed(1)} MB` : ''}</div>
+                            </div>
+                            {j.status !== 'done' && j.status !== 'error' && (
+                              <Badge className="bg-amber-500/20 border-amber-400/30 text-amber-200 capitalize text-[10px]">{j.status}</Badge>
+                            )}
                           </div>
-                        )}
-                        {j.status !== 'done' && j.status !== 'error' && (
-                          <div className="mt-1.5 h-1 bg-white/10 rounded-full overflow-hidden">
-                            <div className="h-full bg-gradient-to-r from-purple-400 to-pink-400 transition-all" style={{ width: `${j.progress}%` }} />
-                          </div>
-                        )}
-                      </div>
-
+ 
+                          {/* Progress bar */}
+                          {j.status !== 'done' && j.status !== 'error' && (
+                            <div className="h-1 bg-white/10 rounded-full overflow-hidden mb-2">
+                              <div className="h-full bg-gradient-to-r from-purple-400 to-pink-400 transition-all" style={{ width: `${j.progress}%` }} />
+                            </div>
+                          )}
+ 
+                          {/* Error */}
+                          {j.status === 'error' && j.errorMsg && (
+                            <div className="text-[11px] text-red-400 flex items-center gap-1 mb-2">
+                              <CloudOff className="size-3 shrink-0" /> {j.errorMsg}
+                            </div>
+                          )}
+ 
+                          {/* Actions for completed exports */}
+                          {j.status === 'done' && (
+                            <div className="flex gap-2">
+                              {j.url && (
+                                <a href={j.url} download={`${j.name}.${ext}`} className="flex-1">
+                                  <Button size="sm" className="w-full bg-white text-gray-900 hover:bg-gray-100 h-7 text-xs">
+                                    <Download className="size-3 mr-1" /> Download
+                                  </Button>
+                                </a>
+                              )}
+                              {j.url && (
+                                <Button size="sm" variant="outline"
+                                  className="border-white/20 text-white hover:bg-white/10 h-7 text-xs flex-1"
+                                  onClick={() => navigator.clipboard?.writeText(j.url!)}>
+                                  <Share2 className="size-3 mr-1" /> Copy
+                                </Button>
+                              )}
+                              {!j.url && (
+                                <span className="text-[11px] text-gray-400 flex items-center gap-1">
+                                  <Cloud className="size-3" /> saved to cloud
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </TabsContent>
+ 
+            </div>
+          </Tabs>
+        </div>
+      </div>
+    </div>
+  );
                       
                       {j.status === 'done' ? (
                         j.url ? (
