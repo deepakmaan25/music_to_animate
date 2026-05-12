@@ -323,64 +323,7 @@ function LandingApp() {
   </button>
 </div>
  
-                {/* Mobile: just avatar + sign out */}
-                <div className="flex sm:hidden items-center gap-1">
-                  <button
-                    onClick={() => setMyProjectsOpen(true)}
-                    className="size-8 rounded-full flex items-center justify-center text-xs font-semibold text-white"
-                    style={{ background: 'var(--hero-cta-gradient)' }}
-                    title="My Projects"
-                  >
-                    {(user.email || '?').slice(0, 1).toUpperCase()}
-                  </button>
-                  <button
-                    onClick={signOut}
-                    className="size-8 rounded-md flex items-center justify-center border"
-                    style={{
-                      background: 'var(--surface-elevated)',
-                      borderColor: 'var(--surface-glass-border)',
-                      color: 'var(--text-muted)',
-                    }}
-                    aria-label="Sign out"
-                  >
-                    <LogOut className="size-3.5" />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <Button
-                variant="ghost"
-                onClick={() => setAuthOpen(true)}
-                className="h-9 hidden sm:inline-flex"
-                style={{ color: 'var(--text-strong)' }}
-              >
-                Sign in
-              </Button>
-            )}
             
-            <Button
-              onClick={() => openPicker()}
-              className="h-9 text-white"
-              style={{ background: 'var(--hero-cta-gradient)' }}
-            >
-              <Upload className="size-4 mr-2" /> New project
-            </Button>
-            <button
-              onClick={toggleTheme}
-              aria-label="Toggle dark mode"
-              className="size-9 rounded-full border flex items-center justify-center transition-all hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-              style={{
-                background: 'var(--surface-elevated)',
-                borderColor: 'var(--surface-glass-border)',
-                color: 'var(--text-strong)'
-              }}
-            >
-              {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-            </button>
-          </div>
-        </div>
-      </nav>
-
       {/* HERO */}
       <section className="relative pt-32 pb-24 px-6">
         <div className="max-w-6xl mx-auto relative">
