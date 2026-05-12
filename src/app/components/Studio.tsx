@@ -1351,11 +1351,11 @@ if (dbExports.length > 0) {
 
             </div>{/* closes flex-1 overflow-y-auto */}
           </Tabs>
-        </div>{/* closes right column */}
-      </div>{/* closes flex-1 grid */}
-    </div>{/* closes h-screen */}
-  );
-}
+        </div>
+        </div>
+      </div>
+    );
+  }
 
       
 
