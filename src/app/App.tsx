@@ -322,6 +322,8 @@ function LandingApp() {
     {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
   </button>
 </div>
+        </div>
+        </nav>
  
             
       {/* HERO */}
