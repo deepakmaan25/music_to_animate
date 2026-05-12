@@ -14,7 +14,10 @@ import {
 import { Button } from './ui/button';
 import { fetchUserProjects, fetchProjectExports, deleteDBProject, type DBProject } from '../lib/db';
 import { useAuth } from '../hooks/useAuth';
-
+import {
+  X, Music, Trash2, ExternalLink, Clock, FileVideo,
+  Cloud, CloudOff, Loader2, FolderOpen, Play, Share2  // ← add Play and Share2
+} from 'lucide-react';
 import type { DBExport } from '../lib/db';
 
 type ProjectWithMeta = DBProject & {
@@ -284,4 +287,66 @@ export function MyProjects({ open, onClose, onOpenProject, onDeleteLocal }: MyPr
       )}
     </AnimatePresence>
   );
+  /**
+ * Fetches a signed URL for the export and opens it in a new tab.
+ * Also copies the URL to clipboard on second action.
+ */
+function PlayExportButton({ storagePath }: { storagePath: string }) {
+  const [loading, setLoading] = useState(false);
+
+  const handlePlay = async () => {
+    setLoading(true);
+    try {
+      const { getExportSignedUrl } = await import('../lib/storage');
+      const url = await getExportSignedUrl(storagePath, 3600);
+      if (url) {
+        window.open(url, '_blank', 'noopener');
+      }
+    } catch (err) {
+      console.error('Failed to get export URL:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCopy = async () => {
+    setLoading(true);
+    try {
+      const { getExportSignedUrl } = await import('../lib/storage');
+      const url = await getExportSignedUrl(storagePath, 86400);
+      if (url) await navigator.clipboard.writeText(url);
+    } catch (err) {
+      console.error('Failed to copy export URL:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        onClick={handlePlay}
+        disabled={loading}
+        className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border transition-colors hover:bg-white/5 disabled:opacity-40"
+        style={{ borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}
+        title="Play in new tab"
+      >
+        {loading ? <Loader2 className="size-3 animate-spin" /> : <Play className="size-3" />}
+        Play
+      </button>
+      <button
+        onClick={handleCopy}
+        disabled={loading}
+        className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border transition-colors hover:bg-white/5 disabled:opacity-40"
+        style={{ borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}
+        title="Copy link"
+      >
+        <Share2 className="size-3" />
+        Copy
+      </button>
+    </div>
+  );
+}
+
+  
 }
