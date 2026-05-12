@@ -32,14 +32,11 @@ export function useSupabaseSync(userId: string | undefined) {
 
   const saveConfig = useCallback(
     (projectId: string, config: SyncableConfig) => {
-      console.log('[sync] saveConfig called', { userId, projectId });
 
       if (!userId) {
-        console.warn('[sync] saveConfig SKIPPED — userId is missing');
         return;
       }
       if (!projectId) {
-        console.warn('[sync] saveConfig SKIPPED — projectId is missing');
         return;
       }
 
@@ -78,8 +75,6 @@ const uploadAudio = useCallback(
     const { supabase } = await import('../lib/supabase');
     const { data: { user: liveUser } } = await supabase.auth.getUser();
     const resolvedUserId = liveUser?.id ?? userId;
-
-    console.log('[sync] uploadAudio called', { resolvedUserId, projectId, fileName: file.name });
 
     if (!resolvedUserId) {
       console.warn('[sync] uploadAudio SKIPPED — not signed in');
@@ -124,7 +119,6 @@ const uploadAudio = useCallback(
         duration: audioMeta.duration,
       });
 
-      console.log('[sync] uploadAudio COMPLETE — path:', storagePath);
       return storagePath;
     },
     [userId]
@@ -135,7 +129,6 @@ const uploadAudio = useCallback(
       console.log('[sync] saveExport called', { userId, projectId, exportId: params.exportId });
 
       if (!userId || !projectId) {
-        console.warn('[sync] saveExport SKIPPED — missing userId or projectId');
         return;
       }
 
@@ -160,7 +153,6 @@ const uploadAudio = useCallback(
           .then((storagePath) => {
             if (storagePath) {
               patchExportRecord(exportId, { storage_path: storagePath });
-              console.log('[sync] export blob uploaded to:', storagePath);
             }
           })
           .catch((err) => console.error('[sync] export blob upload failed:', err));
