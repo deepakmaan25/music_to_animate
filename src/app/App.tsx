@@ -263,45 +263,65 @@ function LandingApp() {
               Beta
             </span>
           </div>
-          <div className="flex items-center gap-1.5">
 
-                {user ? (
-              <div className="flex items-center gap-2">
-                {/* Desktop: full pill */}
-                <div
-                  className="hidden sm:flex items-center gap-2 px-2.5 h-9 rounded-full border"
-                  style={{ background: 'var(--surface-elevated)', borderColor: 'var(--surface-glass-border)' }}
-                >
-                  <div
-                    className="size-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white cursor-pointer"
-                    style={{ background: 'var(--hero-cta-gradient)' }}
-                    onClick={() => setMyProjectsOpen(true)}
-                    title="My Projects"
-                  >
-                    {(user.email || '?').slice(0, 1).toUpperCase()}
-                  </div>
-                  <span
-                    className="text-xs max-w-[140px] truncate cursor-pointer hover:underline"
-                    style={{ color: 'var(--text-strong)' }}
-                    onClick={() => setMyProjectsOpen(true)}
-                  >
-                    {user.email}
-                  </span>
-                  <span title={syncStatus} className="ml-1 flex items-center" style={{ color: 'var(--text-muted)' }}>
-                    {syncStatus === 'syncing'
-                      ? <Cloud className="size-3.5 animate-pulse" />
-                      : syncStatus === 'error'
-                      ? <CloudOff className="size-3.5 text-red-500" />
-                      : <Cloud className="size-3.5 text-emerald-500" />}
-                  </span>
-                  <button
-                    onClick={signOut}
-                    className="size-7 rounded-md flex items-center justify-center hover:bg-black/5"
-                    aria-label="Sign out"
-                  >
-                    <LogOut className="size-3.5" style={{ color: 'var(--text-muted)' }} />
-                  </button>
-                </div>
+          <div className="flex items-center gap-1.5">
+  {user ? (
+    <div className="flex items-center gap-1">
+      {/* Avatar — always visible, opens My Projects */}
+      <button
+        onClick={() => setMyProjectsOpen(true)}
+        className="size-8 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
+        style={{ background: 'var(--hero-cta-gradient)' }}
+        title="My Projects"
+      >
+        {(user.email || '?').slice(0, 1).toUpperCase()}
+      </button>
+      {/* Sign out — always visible on all sizes */}
+      <button
+        onClick={signOut}
+        className="size-8 rounded-md border flex items-center justify-center shrink-0"
+        style={{
+          background: 'var(--surface-elevated)',
+          borderColor: 'var(--surface-glass-border)',
+          color: 'var(--text-muted)',
+        }}
+        aria-label="Sign out"
+      >
+        <LogOut className="size-3.5" />
+      </button>
+    </div>
+  ) : (
+    <Button
+      variant="ghost"
+      onClick={() => setAuthOpen(true)}
+      className="h-8 text-sm px-3"
+      style={{ color: 'var(--text-strong)' }}
+    >
+      Sign in
+    </Button>
+  )}
+  <Button
+    onClick={() => openPicker()}
+    className="h-8 text-sm text-white px-3"
+    style={{ background: 'var(--hero-cta-gradient)' }}
+  >
+    <Upload className="size-3.5 mr-1.5" />
+    <span className="hidden sm:inline">New project</span>
+    <span className="sm:hidden">New</span>
+  </Button>
+  <button
+    onClick={toggleTheme}
+    aria-label="Toggle dark mode"
+    className="size-8 rounded-full border flex items-center justify-center shrink-0"
+    style={{
+      background: 'var(--surface-elevated)',
+      borderColor: 'var(--surface-glass-border)',
+      color: 'var(--text-strong)'
+    }}
+  >
+    {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+  </button>
+</div>
  
                 {/* Mobile: just avatar + sign out */}
                 <div className="flex sm:hidden items-center gap-1">
