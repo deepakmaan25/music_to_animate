@@ -1,5 +1,6 @@
+ 
 import { supabase } from './supabase';
-
+ 
 export type DBProject = {
   id: string;
   user_id: string;
@@ -11,7 +12,7 @@ export type DBProject = {
   created_at: string;
   updated_at: string;
 };
-
+ 
 export type DBTrack = {
   project_id: string;
   user_id: string;
@@ -22,7 +23,7 @@ export type DBTrack = {
   duration?: number;
   created_at: string;
 };
-
+ 
 export type DBExport = {
   id: string;
   user_id: string;
@@ -38,96 +39,94 @@ export type DBExport = {
   error_message?: string;
   created_at: string;
 };
-
+ 
 export async function upsertProject(
   project: Omit<DBProject, 'created_at' | 'updated_at'>
 ): Promise<boolean> {
-  console.log('[db] upsertProject called', { id: project.id, user_id: project.user_id });
-
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  console.log('[db] auth.getUser() result:', user?.id ?? 'NULL', authErr?.message ?? 'no error');
-
   const { error } = await supabase
     .from('projects')
     .upsert(
       { ...project, updated_at: new Date().toISOString() },
       { onConflict: 'id' }
     );
-
   if (error) {
-    console.error('[db] upsertProject FAILED:', error.message, '| code:', error.code, '| details:', error.details);
+    console.error('[db] upsertProject failed:', error.message, error.code);
     return false;
   }
-  console.log('[db] upsertProject SUCCESS:', project.id);
   return true;
 }
-
+ 
 export async function upsertTrack(
   track: Omit<DBTrack, 'created_at'>
 ): Promise<boolean> {
-  console.log('[db] upsertTrack called', { project_id: track.project_id });
-
   const { error } = await supabase
     .from('project_tracks')
     .upsert(track, { onConflict: 'project_id' });
-
   if (error) {
-    console.error('[db] upsertTrack FAILED:', error.message, '| code:', error.code);
+    console.error('[db] upsertTrack failed:', error.message, error.code);
     return false;
   }
-  console.log('[db] upsertTrack SUCCESS');
   return true;
 }
-
+ 
 export async function upsertExportRecord(
   exp: Omit<DBExport, 'created_at'>
 ): Promise<boolean> {
-  console.log('[db] upsertExportRecord called', { id: exp.id, project_id: exp.project_id });
-
   const { error } = await supabase
     .from('exports')
     .upsert(exp, { onConflict: 'id' });
-
   if (error) {
-    console.error('[db] upsertExportRecord FAILED:', error.message, '| code:', error.code);
+    console.error('[db] upsertExportRecord failed:', error.message, error.code);
     return false;
   }
-  console.log('[db] upsertExportRecord SUCCESS');
   return true;
 }
-
+ 
 export async function patchExportRecord(
   exportId: string,
   patch: Partial<Omit<DBExport, 'id' | 'user_id' | 'project_id' | 'created_at'>>
 ): Promise<boolean> {
   const { error } = await supabase.from('exports').update(patch).eq('id', exportId);
-  if (error) { console.error('[db] patchExportRecord FAILED:', error.message); return false; }
+  if (error) { console.error('[db] patchExportRecord failed:', error.message); return false; }
   return true;
 }
-
+ 
 export async function fetchUserProjects(userId: string): Promise<DBProject[]> {
-  console.log('[db] fetchUserProjects for userId:', userId);
-
   const { data, error } = await supabase
     .from('projects')
     .select('*')
     .eq('user_id', userId)
     .order('updated_at', { ascending: false });
-
-  if (error) {
-    console.error('[db] fetchUserProjects FAILED:', error.message, '| code:', error.code);
-    return [];
-  }
-  console.log('[db] fetchUserProjects returned', data?.length ?? 0, 'rows');
+  if (error) { console.error('[db] fetchUserProjects failed:', error.message); return []; }
   return (data ?? []) as DBProject[];
 }
-
+ 
+export async function fetchProjectTrack(projectId: string): Promise<DBTrack | null> {
+  const { data, error } = await supabase
+    .from('project_tracks')
+    .select('*')
+    .eq('project_id', projectId)
+    .maybeSingle();
+  if (error) { console.error('[db] fetchProjectTrack failed:', error.message); return null; }
+  return data as DBTrack | null;
+}
+ 
+export async function fetchProjectExports(projectId: string): Promise<DBExport[]> {
+  const { data, error } = await supabase
+    .from('exports')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false });
+  if (error) { console.error('[db] fetchProjectExports failed:', error.message); return []; }
+  return (data ?? []) as DBExport[];
+}
+ 
 export async function deleteDBProject(projectId: string): Promise<boolean> {
   const { error } = await supabase.from('projects').delete().eq('id', projectId);
-  if (error) { console.error('[db] deleteDBProject FAILED:', error.message); return false; }
+  if (error) { console.error('[db] deleteDBProject failed:', error.message); return false; }
   return true;
 }
-
+ 
 export function dbProjectToStored(p: DBProject) {
   return {
     id: p.id,
