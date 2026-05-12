@@ -818,8 +818,8 @@ if (user?.id) {
       await loadFile(file);
  
       // 5. Restore export history from DB
-      const db= await fetchProjectExports(projId);
-      if (dbExports.length > 0) {
+      const dbExports = await fetchProjectExports(projId);
+if (dbExports.length > 0) {
         const restored: ExportJob[] = dbExports.map((e) => ({
           id: Number(e.id) || Date.now(),
           name: `${track.filename.replace(/\.[^.]+$/, '')}_${e.aspect_ratio?.replace(':', 'x') ?? ''}_${e.quality_preset ?? ''}`,
@@ -1283,151 +1283,81 @@ if (user?.id) {
                 )}
               </TabsContent>
  
-        
-        {/* Side panel */}
-        <Card className="bg-white/5 border-white/10 p-4 h-fit lg:sticky lg:top-6">
-          <Tabs defaultValue="style">
-            <TabsList className="grid grid-cols-4 w-full bg-white/5">
-              <TabsTrigger value="style">Style</TabsTrigger>
-              <TabsTrigger value="motion">Motion</TabsTrigger>
-              <TabsTrigger value="color">Color</TabsTrigger>
-              <TabsTrigger value="export">Export</TabsTrigger>
-            </TabsList>
-
-            {/* ── Style tab ──────────────────────────────────────────────── */}
-            <TabsContent value="style" className="pt-4 space-y-4">
-              {(['2D', '3D'] as const).map((group) => (
-                <div key={group} className="space-y-2">
-                  <div className="text-xs uppercase tracking-wider text-gray-400 flex items-center gap-2">
-                    {group === '3D' ? '3D · Immersive' : 'Classic'}
-                    {group === '3D' && (
-                      <span className="px-1.5 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-200 border border-purple-400/30">NEW</span>
-                    )}
+        {/* ── History tab ─────────────────────────────────── */}
+              <TabsContent value="exports" className="p-4 mt-0">
+                <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-3">Export history</div>
+                {exports.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-center">
+                    <FileVideo className="size-8 text-gray-600 mb-3" />
+                    <p className="text-xs text-gray-400">No exports yet</p>
+                    <p className="text-[11px] text-gray-500 mt-1">Use the Export tab to render your first video</p>
                   </div>
-                  {ENGINES.filter((e) => e.group === group).map((e) => (
-                    <button key={e.id} onClick={() => setEngine(e.id)}
-                      className={`w-full text-left p-3 rounded-lg border transition-all ${engine === e.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
-                      <div className="font-semibold text-sm">{e.name}</div>
-                      <div className={`text-xs ${engine === e.id ? 'text-gray-600' : 'text-gray-400'}`}>{e.description}</div>
-                    </button>
-                  ))}
-                </div>
-              ))}
-            </TabsContent>
-
-            {/* ── Motion tab ─────────────────────────────────────────────── */}
-            <TabsContent value="motion" className="pt-4 space-y-5">
-              <Slider label="Beat sensitivity" value={beatSensitivity} onChange={setBeatSensitivity} min={0} max={1} step={0.01} />
-              <Slider label="Particle density"  value={particleDensity} onChange={setParticleDensity} min={0} max={1} step={0.01} />
-              <Slider label="Smoothing"          value={smoothing}       onChange={setSmoothing}       min={0} max={0.95} step={0.01} />
-
-              {/* Depth-specific controls */}
-              {engine === 'depth' && (
-                <div className="space-y-4 border-t border-white/10 pt-4">
-                  <div className="text-xs uppercase tracking-wider text-purple-300">Depth Field</div>
-                  <Slider label="Base travel speed"    value={baseSpeed}    onChange={setBaseSpeed}    min={0} max={1} step={0.01} />
-                  <Slider label="Beat responsiveness"  value={beatResponse} onChange={setBeatResponse} min={0} max={1} step={0.01} />
-                </div>
-              )}
-
-              <label className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10 cursor-pointer">
-                <div>
-                  <div className="text-sm font-medium">Performance mode</div>
-                  <div className="text-xs text-gray-400">Reduces detail for low-power devices.</div>
-                </div>
-                <input type="checkbox" checked={perfMode} onChange={(e) => setPerfMode(e.target.checked)} className="size-4 accent-purple-500" />
-              </label>
-            </TabsContent>
-
-            {/* ── Color tab ──────────────────────────────────────────────── */}
-            <TabsContent value="color" className="pt-4 space-y-3">
-              <div className="text-xs uppercase tracking-wider text-gray-400">Palette</div>
-              {PALETTES.map((p, i) => (
-                <button key={p.name} onClick={() => setPalette(i)}
-                  className={`w-full flex items-center gap-3 p-2 rounded-lg border transition-all ${palette === i ? 'bg-white/15 border-white/40' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
-                  <div className="flex gap-1">
-                    {p.colors.map((c) => <span key={c} className="size-6 rounded" style={{ background: c }} />)}
+                ) : (
+                  <div className="space-y-2">
+                    {exports.map((j) => {
+                      const ext = exportMode === 'mp4' ? 'mp4' : 'webm';
+                      return (
+                        <div key={j.id} className="rounded-xl border bg-white/5 border-white/10 p-3">
+                          <div className="flex items-start gap-2.5 mb-2">
+                            <div className="size-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center shrink-0">
+                              <FileVideo className="size-3.5" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-semibold truncate">{j.name}.{ext}</div>
+                              <div className="text-[11px] text-gray-400">{j.preset} · {j.aspect}{j.size ? ` · ${(j.size / (1024 * 1024)).toFixed(1)} MB` : ''}</div>
+                            </div>
+                            {j.status !== 'done' && j.status !== 'error' && (
+                              <Badge className="bg-amber-500/20 border-amber-400/30 text-amber-200 capitalize text-[10px]">{j.status}</Badge>
+                            )}
+                          </div>
+                          {j.status !== 'done' && j.status !== 'error' && (
+                            <div className="h-1 bg-white/10 rounded-full overflow-hidden mb-2">
+                              <div className="h-full bg-gradient-to-r from-purple-400 to-pink-400 transition-all" style={{ width: `${j.progress}%` }} />
+                            </div>
+                          )}
+                          {j.status === 'error' && j.errorMsg && (
+                            <div className="text-[11px] text-red-400 flex items-center gap-1 mb-2">
+                              <CloudOff className="size-3 shrink-0" /> {j.errorMsg}
+                            </div>
+                          )}
+                          {j.status === 'done' && (
+                            <div className="flex gap-2">
+                              {j.url ? (
+                                <>
+                                  <a href={j.url} download={`${j.name}.${ext}`} className="flex-1">
+                                    <Button size="sm" className="w-full bg-white text-gray-900 hover:bg-gray-100 h-7 text-xs">
+                                      <Download className="size-3 mr-1" /> Download
+                                    </Button>
+                                  </a>
+                                  <Button size="sm" variant="outline"
+                                    className="border-white/20 text-white hover:bg-white/10 h-7 text-xs flex-1"
+                                    onClick={() => navigator.clipboard?.writeText(j.url!)}>
+                                    <Share2 className="size-3 mr-1" /> Copy
+                                  </Button>
+                                </>
+                              ) : (
+                                <span className="text-[11px] text-gray-400 flex items-center gap-1">
+                                  <Cloud className="size-3" /> saved to cloud
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                  <span className="text-sm">{p.name}</span>
-                  {palette === i && <Check className="size-4 ml-auto text-emerald-400" />}
-                </button>
-              ))}
-            </TabsContent>
+                )}
+              </TabsContent>
 
-            {/* ── Export tab ─────────────────────────────────────────────── */}
-            <TabsContent value="export" className="pt-4 space-y-4">
-              {/* Export mode badge */}
-              <div className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ${
-                exportMode === 'server'
-                  ? 'bg-amber-500/10 border-amber-400/30 text-amber-300'
-                  : 'bg-white/5 border-white/10 text-gray-300'
-              }`}>
-                {exportMode === 'webm'   && <Monitor   className="size-3 text-emerald-400 shrink-0" />}
-                {exportMode === 'mp4'    && <Smartphone className="size-3 text-blue-400 shrink-0" />}
-                {exportMode === 'server' && <AlertCircle className="size-3 text-amber-400 shrink-0" />}
-                {exportModeLabel}
-              </div>
-
-              <div>
-                <div className="text-xs uppercase tracking-wider text-gray-400 mb-2">Aspect</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {ASPECTS.map((a) => (
-                    <button key={a.id} onClick={() => setAspect(a.id)}
-                      className={`p-2 rounded-lg border text-left text-xs ${aspect === a.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
-                      <div className="font-semibold">{a.label}</div>
-                      <div className="opacity-70">{a.sub}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-xs uppercase tracking-wider text-gray-400 mb-2">Duration</div>
-                <div className="flex gap-2 flex-wrap">
-                  {(['full', 15, 30, 60] as const).map((d) => (
-                    <button key={String(d)} onClick={() => setClipDuration(d)}
-                      className={`px-3 py-1.5 rounded-lg border text-xs ${clipDuration === d ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
-                      {d === 'full' ? 'Full' : `${d}s`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <div className="text-xs uppercase tracking-wider text-gray-400 mb-2">Quality</div>
-                <div className="space-y-2">
-                  {PRESETS.map((p) => (
-                    <button key={p.id} onClick={() => setPresetId(p.id)}
-                      className={`w-full text-left p-2 rounded-lg border text-xs ${presetId === p.id ? 'bg-white/15 border-white/40 ring-1 ring-white/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
-                      <div className="font-semibold text-sm">{p.name}</div>
-                      <div className="text-gray-400">{p.label}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <Button disabled={!project || status !== 'ready' || exportMode === 'server'}
-                onClick={startExport}
-                className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:opacity-50">
-                <FileVideo className="size-4 mr-2" /> Start export
-              </Button>
-
-              {exportMode === 'server' ? (
-                <p className="text-xs text-amber-400/80">
-                  Direct recording isn't supported on this browser. Please use Chrome or Firefox on desktop / Android.
-                </p>
-              ) : (
-                <p className="text-xs text-gray-400">
-                  Renders the live canvas + audio in real time. Output: {exportMode === 'mp4' ? 'MP4' : 'WebM'}.
-                </p>
-              )}
-            </TabsContent>
+            </div>{/* closes flex-1 overflow-y-auto */}
           </Tabs>
-        </Card>
-      </div>
-    </div>
+        </div>{/* closes right column */}
+      </div>{/* closes flex-1 grid */}
+    </div>{/* closes h-screen */}
   );
 }
+
+      
 
 // ─── Slider helper component ─────────────────────────────────────────────────
 function Slider({ label, value, onChange, min, max, step }: {
