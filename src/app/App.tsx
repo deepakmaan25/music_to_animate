@@ -12,8 +12,9 @@ import { AuthCallback } from './components/AuthCallback';
 import { useTheme } from './hooks/useTheme';
 import { usePersistentProjects, type StoredProject } from './hooks/usePersistentProjects';
 import { useAuth } from './hooks/useAuth';
-import { SERVER_URL, ANON_KEY } from './lib/supabase';
 import { fetchUserProjects, deleteDBProject, dbProjectToStored } from './lib/db';
+import { MyProjects } from './components/MyProjects';
+
 
 type EngineId = 'bars' | 'radial' | 'depth' | 'orbital' | 'terrain' | 'tunnel' | 'neon_spheres' | 'fractal' | 'solar';
 type StudioEngine = 'bars' | 'radial' | 'depth' | 'orbital' | 'terrain' | 'tunnel' | 'neon_spheres' | 'fractal' | 'solar';
@@ -112,6 +113,7 @@ function LandingApp() {
   const persist = usePersistentProjects();
   const { user, session, signOut } = useAuth();
   const [authOpen, setAuthOpen] = useState(false);
+  const [myProjectsOpen, setMyProjectsOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
 
   // On login, push local projects to server + pull remote ones
@@ -262,18 +264,68 @@ function LandingApp() {
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            {user ? (
-              <div className="hidden sm:flex items-center gap-2 px-2.5 h-9 rounded-full border" style={{ background: 'var(--surface-elevated)', borderColor: 'var(--surface-glass-border)' }}>
-                <div className="size-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white" style={{ background: 'var(--hero-cta-gradient)' }}>
-                  {(user.email || '?').slice(0, 1).toUpperCase()}
+
+                {user ? (
+              <div className="flex items-center gap-2">
+                {/* Desktop: full pill */}
+                <div
+                  className="hidden sm:flex items-center gap-2 px-2.5 h-9 rounded-full border"
+                  style={{ background: 'var(--surface-elevated)', borderColor: 'var(--surface-glass-border)' }}
+                >
+                  <div
+                    className="size-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white cursor-pointer"
+                    style={{ background: 'var(--hero-cta-gradient)' }}
+                    onClick={() => setMyProjectsOpen(true)}
+                    title="My Projects"
+                  >
+                    {(user.email || '?').slice(0, 1).toUpperCase()}
+                  </div>
+                  <span
+                    className="text-xs max-w-[140px] truncate cursor-pointer hover:underline"
+                    style={{ color: 'var(--text-strong)' }}
+                    onClick={() => setMyProjectsOpen(true)}
+                  >
+                    {user.email}
+                  </span>
+                  <span title={syncStatus} className="ml-1 flex items-center" style={{ color: 'var(--text-muted)' }}>
+                    {syncStatus === 'syncing'
+                      ? <Cloud className="size-3.5 animate-pulse" />
+                      : syncStatus === 'error'
+                      ? <CloudOff className="size-3.5 text-red-500" />
+                      : <Cloud className="size-3.5 text-emerald-500" />}
+                  </span>
+                  <button
+                    onClick={signOut}
+                    className="size-7 rounded-md flex items-center justify-center hover:bg-black/5"
+                    aria-label="Sign out"
+                  >
+                    <LogOut className="size-3.5" style={{ color: 'var(--text-muted)' }} />
+                  </button>
                 </div>
-                <span className="text-xs max-w-[140px] truncate" style={{ color: 'var(--text-strong)' }}>{user.email}</span>
-                <span title={syncStatus} className="ml-1 flex items-center" style={{ color: 'var(--text-muted)' }}>
-                  {syncStatus === 'syncing' ? <Cloud className="size-3.5 animate-pulse" /> : syncStatus === 'error' ? <CloudOff className="size-3.5 text-red-500" /> : <Cloud className="size-3.5 text-emerald-500" />}
-                </span>
-                <button onClick={signOut} className="size-7 rounded-md flex items-center justify-center hover:bg-black/5" aria-label="Sign out">
-                  <LogOut className="size-3.5" style={{ color: 'var(--text-muted)' }} />
-                </button>
+ 
+                {/* Mobile: just avatar + sign out */}
+                <div className="flex sm:hidden items-center gap-1">
+                  <button
+                    onClick={() => setMyProjectsOpen(true)}
+                    className="size-8 rounded-full flex items-center justify-center text-xs font-semibold text-white"
+                    style={{ background: 'var(--hero-cta-gradient)' }}
+                    title="My Projects"
+                  >
+                    {(user.email || '?').slice(0, 1).toUpperCase()}
+                  </button>
+                  <button
+                    onClick={signOut}
+                    className="size-8 rounded-md flex items-center justify-center border"
+                    style={{
+                      background: 'var(--surface-elevated)',
+                      borderColor: 'var(--surface-glass-border)',
+                      color: 'var(--text-muted)',
+                    }}
+                    aria-label="Sign out"
+                  >
+                    <LogOut className="size-3.5" />
+                  </button>
+                </div>
               </div>
             ) : (
               <Button
@@ -285,6 +337,7 @@ function LandingApp() {
                 Sign in
               </Button>
             )}
+            
             <Button
               onClick={() => openPicker()}
               className="h-9 text-white"
@@ -391,14 +444,20 @@ function LandingApp() {
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
               className="mt-16"
             >
-              <div className="flex items-center justify-between mb-3">
+
+                 <div className="flex items-center justify-between mb-3">
                 <div className="text-xs uppercase tracking-wider font-medium" style={{ color: 'var(--text-muted)' }}>
                   Your projects
                 </div>
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {projectList.length} saved
-                </span>
-              </div>
+                <button
+                  onClick={() => setMyProjectsOpen(true)}
+                  className="text-xs hover:underline transition-colors"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  View all ({projectList.length})
+                </button>
+              </div>              
+              
               <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3">
                {projectList.slice(0, 6).map((p) => (
                   <ProjectCard
@@ -570,6 +629,15 @@ function LandingApp() {
       </section>
 
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+       <MyProjects
+        open={myProjectsOpen}
+        onClose={() => setMyProjectsOpen(false)}
+        onOpenProject={(id) => {
+          openExisting(id);
+          setMyProjectsOpen(false);
+        }}
+        onDeleteLocal={(id) => handleDeleteProject(id)}
+      />
 
       <footer
         className="relative py-10 px-6 border-t"
