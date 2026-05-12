@@ -818,7 +818,7 @@ if (user?.id) {
       await loadFile(file);
  
       // 5. Restore export history from DB
-      const dbExports = await fetchProjectExports(projId);
+      const db= await fetchProjectExports(projId);
       if (dbExports.length > 0) {
         const restored: ExportJob[] = dbExports.map((e) => ({
           id: Number(e.id) || Date.now(),
@@ -1283,117 +1283,7 @@ if (user?.id) {
                 )}
               </TabsContent>
  
-              {/* ── Exports history ─────────────────────────────── */}
-              <TabsContent value="exports" className="p-4 mt-0">
-                <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-3">Export history</div>
-                {exports.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-center">
-                    <FileVideo className="size-8 text-gray-600 mb-3" />
-                    <p className="text-xs text-gray-400">No exports yet</p>
-                    <p className="text-[11px] text-gray-500 mt-1">Use the Export tab to render your first video</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {exports.map((j) => {
-                      const ext = exportMode === 'mp4' ? 'mp4' : 'webm';
-                      return (
-                        <div key={j.id} className="rounded-xl border bg-white/5 border-white/10 p-3">
-                          <div className="flex items-start gap-2.5 mb-2">
-                            <div className="size-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center shrink-0">
-                              <FileVideo className="size-3.5" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-xs font-semibold truncate">{j.name}.{ext}</div>
-                              <div className="text-[11px] text-gray-400">{j.preset} · {j.aspect}{j.size ? ` · ${(j.size / (1024 * 1024)).toFixed(1)} MB` : ''}</div>
-                            </div>
-                            {j.status !== 'done' && j.status !== 'error' && (
-                              <Badge className="bg-amber-500/20 border-amber-400/30 text-amber-200 capitalize text-[10px]">{j.status}</Badge>
-                            )}
-                          </div>
- 
-                          {/* Progress bar */}
-                          {j.status !== 'done' && j.status !== 'error' && (
-                            <div className="h-1 bg-white/10 rounded-full overflow-hidden mb-2">
-                              <div className="h-full bg-gradient-to-r from-purple-400 to-pink-400 transition-all" style={{ width: `${j.progress}%` }} />
-                            </div>
-                          )}
- 
-                          {/* Error */}
-                          {j.status === 'error' && j.errorMsg && (
-                            <div className="text-[11px] text-red-400 flex items-center gap-1 mb-2">
-                              <CloudOff className="size-3 shrink-0" /> {j.errorMsg}
-                            </div>
-                          )}
- 
-                          {/* Actions for completed exports */}
-                          {j.status === 'done' && (
-                            <div className="flex gap-2">
-                              {j.url && (
-                                <a href={j.url} download={`${j.name}.${ext}`} className="flex-1">
-                                  <Button size="sm" className="w-full bg-white text-gray-900 hover:bg-gray-100 h-7 text-xs">
-                                    <Download className="size-3 mr-1" /> Download
-                                  </Button>
-                                </a>
-                              )}
-                              {j.url && (
-                                <Button size="sm" variant="outline"
-                                  className="border-white/20 text-white hover:bg-white/10 h-7 text-xs flex-1"
-                                  onClick={() => navigator.clipboard?.writeText(j.url!)}>
-                                  <Share2 className="size-3 mr-1" /> Copy
-                                </Button>
-                              )}
-                              {!j.url && (
-                                <span className="text-[11px] text-gray-400 flex items-center gap-1">
-                                  <Cloud className="size-3" /> saved to cloud
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </TabsContent>
- 
-            </div>
-          </Tabs>
-        </div>
-      </div>
-    </div>
-  );
-                      
-                      {j.status === 'done' ? (
-                        j.url ? (
-                          <div className="flex gap-2">
-                            <a href={j.url} download={`${j.name}.${ext}`}>
-                              <Button size="sm" className="bg-white text-gray-900 hover:bg-gray-100">
-                                <Download className="size-4 mr-1" /> Download
-                              </Button>
-                            </a>
-                            <Button size="sm" variant="outline" className="border-white/20 text-white hover:bg-white/10"
-                              onClick={() => navigator.clipboard?.writeText(j.url!)}>
-                              <Share2 className="size-4 mr-1" /> Copy
-                            </Button>
-                          </div>
-                        ) : (
-                          // Restored from DB — no local blob available
-                          <span className="text-xs text-gray-400 px-2">
-                            ☁ saved
-                          </span>
-                        )
-                      ) : j.status !== 'error' ? (
-                        <Badge className="bg-amber-500/20 border-amber-400/30 text-amber-200 capitalize">{j.status}</Badge>
-                      ) : null}
-                      
-                    </Card>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-
+        
         {/* Side panel */}
         <Card className="bg-white/5 border-white/10 p-4 h-fit lg:sticky lg:top-6">
           <Tabs defaultValue="style">
