@@ -15,8 +15,11 @@ import { Button } from './ui/button';
 import { fetchUserProjects, fetchProjectExports, deleteDBProject, type DBProject } from '../lib/db';
 import { useAuth } from '../hooks/useAuth';
 
+import type { DBExport } from '../lib/db';
+
 type ProjectWithMeta = DBProject & {
   exportCount: number;
+  exports: DBExport[];
 };
 
 type MyProjectsProps = {
@@ -31,6 +34,7 @@ export function MyProjects({ open, onClose, onOpenProject, onDeleteLocal }: MyPr
   const [projects, setProjects] = useState<ProjectWithMeta[]>([]);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Load projects when modal opens
   useEffect(() => {
@@ -44,11 +48,11 @@ export function MyProjects({ open, onClose, onOpenProject, onDeleteLocal }: MyPr
 
         // Fetch export counts in parallel
         const withCounts = await Promise.all(
-          dbProjects.map(async (p) => {
-            const exports = await fetchProjectExports(p.id);
-            return { ...p, exportCount: exports.length };
-          })
-        );
+  dbProjects.map(async (p) => {
+    const exports = await fetchProjectExports(p.id);
+    return { ...p, exportCount: exports.length, exports };
+  })
+);
 
         if (!cancelled) setProjects(withCounts);
       } catch (err) {
@@ -188,27 +192,88 @@ export function MyProjects({ open, onClose, onOpenProject, onDeleteLocal }: MyPr
 
                       {/* Actions */}
                       <div className="flex items-center gap-2 shrink-0">
-                        <Button
-                          size="sm"
-                          onClick={(e) => { e.stopPropagation(); onOpenProject(p.id); onClose(); }}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs"
-                          style={{ background: 'var(--hero-cta-gradient)' }}
-                        >
-                          <ExternalLink className="size-3 mr-1" /> Open
-                        </Button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}
-                          disabled={deletingId === p.id}
-                          className="opacity-0 group-hover:opacity-100 size-8 rounded-md flex items-center justify-center transition-opacity hover:bg-red-500/10 disabled:opacity-40"
-                          style={{ color: 'var(--text-muted)' }}
-                          title="Delete project"
-                        >
-                          {deletingId === p.id
-                            ? <Loader2 className="size-3.5 animate-spin" />
-                            : <Trash2 className="size-3.5" />
-                          }
-                        </button>
-                      </div>
+  <Button
+    size="sm"
+    onClick={(e) => { e.stopPropagation(); onOpenProject(p.id); onClose(); }}
+    className="text-white text-xs"
+    style={{ background: 'var(--hero-cta-gradient)' }}
+  >
+    <ExternalLink className="size-3 mr-1" /> Open
+  </Button>
+  <button
+    onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}
+    disabled={deletingId === p.id}
+    className="size-8 rounded-md flex items-center justify-center hover:bg-red-500/10 disabled:opacity-40 border"
+    style={{
+      borderColor: 'var(--surface-glass-border)',
+      color: 'var(--text-muted)',
+    }}
+    title="Delete project"
+  >
+    {deletingId === p.id
+      ? <Loader2 className="size-3.5 animate-spin" />
+      : <Trash2 className="size-3.5" />
+    }
+  </button>
+</div>
+ {/* Export list — toggleable */}
+              {p.exportCount > 0 && (
+                <div className="w-full mt-2 pt-2 border-t" style={{ borderColor: 'var(--surface-glass-border)' }}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpandedId(expandedId === p.id ? null : p.id);
+                    }}
+                    className="text-xs flex items-center gap-1 mb-2"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <FileVideo className="size-3" />
+                    {expandedId === p.id ? 'Hide' : 'Show'} {p.exportCount} export{p.exportCount !== 1 ? 's' : ''}
+                  </button>
+
+                  {expandedId === p.id && (
+                    <div className="space-y-1.5">
+                      {p.exports.map((exp) => {
+                        const label = [exp.aspect_ratio, exp.resolution, exp.quality_preset]
+                          .filter(Boolean).join(' · ');
+                        const date = new Date(exp.created_at).toLocaleDateString(
+                          undefined, { month: 'short', day: 'numeric' }
+                        );
+                        return (
+                          <div
+                            key={exp.id}
+                            className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg"
+                            style={{ background: 'var(--surface-elevated)' }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium truncate" style={{ color: 'var(--text-strong)' }}>
+                                {exp.export_type?.toUpperCase()} · {label}
+                              </div>
+                              <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                {date}{exp.size_bytes ? ` · ${(exp.size_bytes / (1024 * 1024)).toFixed(1)} MB` : ''}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {exp.storage_path ? (
+                                <>
+                                  {/* Play in new tab */}
+                                  <PlayExportButton storagePath={exp.storage_path} />
+                                </>
+                              ) : (
+                                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                  processing...
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+                      
                     </div>
                   ))}
                 </div>
