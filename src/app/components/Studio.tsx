@@ -10,7 +10,9 @@ import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import type { usePersistentProjects } from '../hooks/usePersistentProjects';
 import { useAuth } from '../hooks/useAuth';
-   import { useSupabaseSync } from '../hooks/useSupabaseSync';
+import { useSupabaseSync } from '../hooks/useSupabaseSync';
+import { fetchProjectTrack, fetchProjectExports } from '../lib/db';
+import { getAudioSignedUrl } from '../lib/storage';
 
 // ─── Platform helpers ────────────────────────────────────────────────────────
 function isIOSDevice(): boolean {
@@ -147,6 +149,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [presetId, setPresetId]       = useState('std');
   const [clipDuration, setClipDuration] = useState<'full' | 15 | 30 | 60>('full');
   const [exports, setExports]         = useState<ExportJob[]>([]);
+  const [uploadingToCloud, setUploadingToCloud] = useState(false);
 
   // ── Live-param refs (RAF closure safety) ──────────────────────────────────
   const engineRef          = useRef<EngineId>(engine);
@@ -196,8 +199,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   useEffect(() => { beatResponseRef.current = beatResponse;    }, [beatResponse]);
 
   // ── Load file on mount ─────────────────────────────────────────────────────
-  useEffect(() => {
-    if (initialFile) loadFile(initialFile);
+    useEffect(() => {
+    if (initialFile) {
+      // New file uploaded from landing page — load directly
+      loadFile(initialFile);
+    } else if (projectId && !initialFile) {
+      // Reopening a saved project — try to reload audio from Supabase Storage
+      reloadProjectAudio(projectId);
+    }
     return () => stopAudio();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -224,11 +233,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     const pending = pendingUploadRef.current;
     pendingUploadRef.current = null;
 
-    console.log('[studio] user now available — firing pending upload for:', persistedId);
-
     supabaseSync
       .uploadAudio(persistedId, pending.file, pending.audioMeta, pending.engineId)
-      .then((path) => console.log('[studio] pending upload result:', path))
       .catch((err) => console.error('[studio] pending upload ERROR:', err));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, persistedId]);
@@ -744,10 +750,17 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         // Fire-and-forget: upload to Supabase if signed in
         // We use created.id directly (not the state variable) because state hasn't updated yet
 if (user?.id) {
-  supabaseSync
-    .uploadAudio(created.id, file, audioMeta, engine)
-    .then((path) => console.log('[studio] uploadAudio result:', path))
-    .catch((err) => console.error('[studio] uploadAudio ERROR:', err));
+    setUploadingToCloud(true);
+        supabaseSync
+          .uploadAudio(created.id, file, audioMeta, engine)
+          .then((path) => {
+                        setUploadingToCloud(false);
+          })
+          .catch((err) => {
+            console.error('[studio] uploadAudio ERROR:', err);
+            setUploadingToCloud(false);
+          });
+  
 } else {
   console.log('[studio] user not ready yet — storing pending upload for project:', created.id);
   pendingUploadRef.current = { file, audioMeta, engineId: engine };
@@ -758,10 +771,17 @@ if (user?.id) {
  
         // Re-upload if user just signed in or track wasn't saved previously
    if (user?.id) {
-  supabaseSync
-    .uploadAudio(persistedId, file, audioMeta, engine)
-    .then((path) => console.log('[studio] uploadAudio result:', path))
-    .catch((err) => console.error('[studio] uploadAudio ERROR:', err));
+ setUploadingToCloud(true);
+        supabaseSync
+          .uploadAudio(persistedId, file, audioMeta, engine)
+          .then((path) => {
+                       setUploadingToCloud(false);
+          })
+          .catch((err) => {
+            console.error('[studio] uploadAudio ERROR:', err);
+            setUploadingToCloud(false);
+          });
+     
 } else {
   console.log('[studio] user not ready yet — storing pending upload for project:', persistedId);
   pendingUploadRef.current = { file, audioMeta, engineId: engine };
@@ -771,6 +791,59 @@ if (user?.id) {
       setStatus('error'); setError(e.message || 'Failed to decode audio.');
     }
   } 
+
+   const reloadProjectAudio = async (projId: string) => {
+    setStatus('decoding');
+    try {
+      // 1. Get track metadata from DB
+      const track = await fetchProjectTrack(projId);
+      if (!track?.storage_path) {
+        // No audio stored yet — show idle state, user can re-upload
+        setStatus('idle');
+        return;
+      }
+ 
+      // 2. Get a signed URL from Supabase Storage
+      const signedUrl = await getAudioSignedUrl(track.storage_path, 3600);
+      if (!signedUrl) {
+        setStatus('idle');
+        return;
+      }
+ 
+      // 3. Fetch the audio blob
+      const response = await fetch(signedUrl);
+      if (!response.ok) throw new Error('Failed to fetch audio from storage');
+      const blob = await response.blob();
+ 
+      // 4. Reconstruct a File object and call loadFile
+      const file = new File([blob], track.filename, { type: track.mime_type || 'audio/mpeg' });
+      await loadFile(file);
+ 
+      // 5. Restore export history from DB
+      const dbExports = await fetchProjectExports(projId);
+      if (dbExports.length > 0) {
+        const restored: ExportJob[] = dbExports.map((e) => ({
+          id: Number(e.id) || Date.now(),
+          name: `${track.filename.replace(/\.[^.]+$/, '')}_${e.aspect_ratio?.replace(':', 'x') ?? ''}_${e.quality_preset ?? ''}`,
+          preset: e.quality_preset ?? '',
+          aspect: e.aspect_ratio ?? '9:16',
+          status: 'done' as const,
+          progress: 100,
+          // No local blob URL available — show cloud indicator instead
+          url: undefined,
+          size: e.size_bytes ?? undefined,
+        }));
+        setExports(restored);
+      }
+ 
+    } catch (err) {
+      console.error('[studio] reloadProjectAudio failed:', err);
+      // Non-fatal — just show idle so user can re-upload
+      setStatus('idle');
+    }
+  };
+  
+  
   const play = async () => {
     if (!project || !audioCtxRef.current || !analyserRef.current) return;
     const ctx = audioCtxRef.current;
@@ -1000,15 +1073,23 @@ if (user?.id) {
           </Button>
           <div>
             <div className="text-sm font-semibold">{project?.fileName || 'New project'}</div>
-            {user && (
+             {user && (
               <span
-                className="text-[10px] px-1.5 py-0.5 rounded ml-1"
-                style={{ background: 'rgba(16,185,129,0.12)', color: 'rgb(16,185,129)' }}
-                title="Saving changes to your account"
+                className="text-[10px] px-1.5 py-0.5 rounded"
+                style={{
+                  background: uploadingToCloud
+                    ? 'rgba(251,191,36,0.12)'
+                    : 'rgba(16,185,129,0.12)',
+                  color: uploadingToCloud
+                    ? 'rgb(251,191,36)'
+                    : 'rgb(16,185,129)',
+                }}
+                title={uploadingToCloud ? 'Uploading audio to your account...' : 'Saved to your account'}
               >
-                ☁ auto-saving
+                {uploadingToCloud ? '⏫ uploading...' : '☁ synced'}
               </span>
             )}
+            
             <div className="text-xs text-gray-400">
               {project ? `${fmt(project.duration)} · ${ENGINES.find((e) => e.id === engine)!.name}` : 'No track loaded'}
             </div>
@@ -1108,21 +1189,31 @@ if (user?.id) {
                           </div>
                         )}
                       </div>
-                      {j.status === 'done' && j.url ? (
-                        <div className="flex gap-2">
-                          <a href={j.url} download={`${j.name}.${ext}`}>
-                            <Button size="sm" className="bg-white text-gray-900 hover:bg-gray-100">
-                              <Download className="size-4 mr-1" /> Download
+
+                      
+                      {j.status === 'done' ? (
+                        j.url ? (
+                          <div className="flex gap-2">
+                            <a href={j.url} download={`${j.name}.${ext}`}>
+                              <Button size="sm" className="bg-white text-gray-900 hover:bg-gray-100">
+                                <Download className="size-4 mr-1" /> Download
+                              </Button>
+                            </a>
+                            <Button size="sm" variant="outline" className="border-white/20 text-white hover:bg-white/10"
+                              onClick={() => navigator.clipboard?.writeText(j.url!)}>
+                              <Share2 className="size-4 mr-1" /> Copy
                             </Button>
-                          </a>
-                          <Button size="sm" variant="outline" className="border-white/20 text-white hover:bg-white/10"
-                            onClick={() => navigator.clipboard?.writeText(j.url!)}>
-                            <Share2 className="size-4 mr-1" /> Copy
-                          </Button>
-                        </div>
+                          </div>
+                        ) : (
+                          // Restored from DB — no local blob available
+                          <span className="text-xs text-gray-400 px-2">
+                            ☁ saved
+                          </span>
+                        )
                       ) : j.status !== 'error' ? (
                         <Badge className="bg-amber-500/20 border-amber-400/30 text-amber-200 capitalize">{j.status}</Badge>
                       ) : null}
+                      
                     </Card>
                   );
                 })}
