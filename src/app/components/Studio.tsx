@@ -207,6 +207,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const cameraDriftYRef      = useRef(0);
   const smoothedEnergyRef    = useRef(0.5);
   const prevSectionLabelRef  = useRef<string | null>(null);
+  // Beat onset detection — first-order difference of bass level
+  const prevBassRef          = useRef(0);
   const audioCtxRef  = useRef<AudioContext | null>(null);
   const analyserRef  = useRef<AnalyserNode | null>(null);
   const gainRef      = useRef<GainNode | null>(null);
@@ -381,28 +383,33 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     // Section-change zoom events
     if (activeSection?.label !== prevSectionLabelRef.current) {
       prevSectionLabelRef.current = activeSection?.label ?? null;
-      if (activeSection?.label === 'drop')    cameraTargetZoomRef.current = 1.06;
-      else if (activeSection?.label === 'chorus') cameraTargetZoomRef.current = 1.03;
-      else if (activeSection?.label === 'breakdown') cameraTargetZoomRef.current = 0.965;
-      else if (activeSection?.label === 'intro' || activeSection?.label === 'outro') cameraTargetZoomRef.current = 0.985;
+      if (activeSection?.label === 'drop')         cameraTargetZoomRef.current = 1.03;
+      else if (activeSection?.label === 'chorus')  cameraTargetZoomRef.current = 1.015;
+      else if (activeSection?.label === 'breakdown') cameraTargetZoomRef.current = 0.978;
+      else if (activeSection?.label === 'intro' || activeSection?.label === 'outro') cameraTargetZoomRef.current = 0.99;
       else cameraTargetZoomRef.current = 1.0;
     }
-    // Breathing zoom layered on top of section target
-    const breathTarget = cameraTargetZoomRef.current * (1 + smoothEnergy * 0.018);
-    cameraZoomRef.current += (breathTarget - cameraZoomRef.current) * 0.022;
+    // Breathing zoom — kept subtle so beats remain visible in frame
+    const breathTarget = cameraTargetZoomRef.current * (1 + smoothEnergy * 0.010);
+    cameraZoomRef.current += (breathTarget - cameraZoomRef.current) * 0.018;
 
     // Slow sinusoidal drift — amplitude scales with section intensity
     const now = Date.now();
-    const driftAmp = 0.0045 * (0.3 + sectionIntensity * 0.7);
+    const driftAmp = 0.003 * (0.3 + sectionIntensity * 0.7);
     cameraDriftXRef.current = Math.sin(now * 0.00034) * driftAmp;
     cameraDriftYRef.current = Math.cos(now * 0.00027) * driftAmp;
 
-    // Apply to wrapper div (GPU-accelerated CSS transform — no per-engine code changes needed)
+    // Apply camera ONLY to 3D engines — 2D engines (bars, radial) get no zoom
+    const is3DEngine = ['orbital','depth','terrain','tunnel','neon_spheres','fractal','solar'].includes(eng);
     if (cameraWrapperRef.current) {
-      const z = cameraZoomRef.current.toFixed(4);
-      const dx = (cameraDriftXRef.current * 100).toFixed(3);
-      const dy = (cameraDriftYRef.current * 100).toFixed(3);
-      cameraWrapperRef.current.style.transform = `translate(${dx}%, ${dy}%) scale(${z})`;
+      if (is3DEngine) {
+        const z = cameraZoomRef.current.toFixed(4);
+        const dx = (cameraDriftXRef.current * 100).toFixed(3);
+        const dy = (cameraDriftYRef.current * 100).toFixed(3);
+        cameraWrapperRef.current.style.transform = `translate(${dx}%, ${dy}%) scale(${z})`;
+      } else {
+        cameraWrapperRef.current.style.transform = 'none';
+      }
     }
     // ─────────────────────────────────────────────────────────────────────
 
@@ -437,7 +444,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       // Mirrored bars: grow outward from centre line
       for (let i = 0; i < bars; i++) {
         const v = (freq[i * step] / 255) * sens * energyMult;
-        const bh = v * h * 0.44 * (0.4 + sectionIntensity * 0.6);
+        const bh = v * h * 0.36 * (0.4 + sectionIntensity * 0.6);
         const grad = ctx.createLinearGradient(0, midY - bh, 0, midY + bh);
         grad.addColorStop(0, liveColors[0]);
         grad.addColorStop(0.5, liveColors[1]);
@@ -515,45 +522,81 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.globalAlpha = 1;
       sparksRef.current = sparksRef.current.filter((s) => s.life > 0.08);
 
-    // ── Depth Field Particles (tuned: slow base + musical beat bursts) ───
+    // ── Depth Field Particles — proper starfield with beat onset ─────────
     } else if (eng === 'depth') {
-      const trail = 0.12 + (1 - bResp) * 0.12;
+      const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
+
+      // Beat ONSET: react only to rising edges, not sustained bass
+      const bassOnset = Math.max(0, bass - prevBassRef.current);
+      prevBassRef.current = bass;
+      const isBeat = bassOnset > 0.055;
+      const beatStrength = isBeat ? bassOnset : 0;
+
+      // Trail fade — shorter = snappier, longer = dreamy
+      const trail = 0.10 + (1 - bResp) * 0.14;
       ctx.fillStyle = `rgba(2,2,8,${trail})`;
       ctx.fillRect(0, 0, w, h);
-      const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      // Section-aware particle count: fewer in breakdown, more in drop/chorus
+
+      // Section-aware particle count
       const densityScale = 0.4 + sectionIntensity * 0.6;
-      const targetCount = Math.floor((perf ? 600 : 1800) * densityScale);
+      const targetCount = Math.floor((perf ? 400 : 1000) * densityScale * (0.4 + particleDensityRef.current * 0.6));
       while (starsRef.current.length < targetCount) {
-        starsRef.current.push({ x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2, z: Math.random(), hue: Math.random() });
+        starsRef.current.push({ x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2, z: 0.2 + Math.random() * 0.8, hue: Math.random() });
       }
-      starsRef.current.length = Math.min(starsRef.current.length, targetCount + 200);
-      // Slow immersive base + sharp beat burst
-      const baseSpd = 0.0008 + bSpeed * 0.004;
-      const beatBurst = bass > 0.45 ? bass * bResp * 0.055 * sens : 0;
+      starsRef.current.length = Math.min(starsRef.current.length, targetCount + 50);
+
+      // Base speed: very slow — beat burst adds the excitement
+      const baseSpd = 0.0003 + bSpeed * 0.0015;
+      const beatBurst = beatStrength * bResp * 0.08 * sens;
       const speed = (baseSpd + beatBurst) * energyMult;
+
       const cx = w / 2, cy = h / 2;
-      const focal = Math.min(w, h) * 0.6;
+      const focal = Math.min(w, h) * 0.65;
+
       for (const s of starsRef.current) {
+        const prevZ = s.z;
         s.z -= speed;
-        if (s.z <= 0.01) { s.x = (Math.random() - 0.5) * 2; s.y = (Math.random() - 0.5) * 2; s.z = 0.9 + Math.random() * 0.1; s.hue = Math.random(); }
+        if (s.z <= 0.004) {
+          s.x = (Math.random() - 0.5) * 2; s.y = (Math.random() - 0.5) * 2;
+          s.z = 0.85 + Math.random() * 0.15; s.hue = Math.random();
+          continue;
+        }
         const sx = cx + (s.x / s.z) * focal;
         const sy = cy + (s.y / s.z) * focal;
-        if (sx < 0 || sx > w || sy < 0 || sy > h) continue;
-        const depth = 1 - s.z;
-        const spawnBonus = bass > 0.5 ? 1 + bass * bResp * 1.5 : 1;
-        const size = Math.max(0.4, depth * (1.8 + mids * 5 * sens) * spawnBonus);
-        const alpha = Math.min(1, depth * 1.6) * (0.45 + highs * 0.55);
-        ctx.fillStyle = liveColors[Math.floor(s.hue * colors.length)] || liveColors[0];
+        if (sx < -30 || sx > w + 30 || sy < -30 || sy > h + 30) continue;
+
+        // Quadratic depth: tiny far stars, large close ones — makes depth VISIBLE
+        const proximity = 1 - s.z;
+        const size = Math.max(0.3, proximity * proximity * (5 + mids * 7 * sens));
+        const alpha = Math.min(1, proximity * 2.0) * (0.4 + highs * 0.6);
+        const color = liveColors[Math.floor(s.hue * liveColors.length)] || liveColors[0];
+
         ctx.globalAlpha = alpha;
+
+        // Star trail on beat burst — warp-speed effect on the beat
+        if (beatBurst > 0.01 && prevZ > 0) {
+          const prevSx = cx + (s.x / prevZ) * focal;
+          const prevSy = cy + (s.y / prevZ) * focal;
+          const trailDist = Math.hypot(sx - prevSx, sy - prevSy);
+          if (trailDist > 1.5 && trailDist < 80) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = Math.max(0.5, size * 0.5);
+            ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.moveTo(prevSx, prevSy); ctx.lineTo(sx, sy); ctx.stroke();
+          }
+        }
+
+        ctx.fillStyle = color;
         ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
       }
       ctx.globalAlpha = 1;
-      // Shockwave ring on strong bass
-      if (bass > 0.6 && bResp > 0.2) {
-        ctx.strokeStyle = liveColors[1]; ctx.lineWidth = 1 + bass;
-        ctx.globalAlpha = 0.25 * bass * bResp;
-        ctx.beginPath(); ctx.arc(cx, cy, Math.min(w, h) * (0.12 + bass * 0.32), 0, Math.PI * 2); ctx.stroke();
+
+      // Shockwave ring — ONLY on strong beat onset, not sustained bass
+      if (isBeat && beatStrength > 0.08) {
+        ctx.strokeStyle = liveColors[1];
+        ctx.lineWidth = 1.5 + beatStrength * 3;
+        ctx.globalAlpha = Math.min(0.7, beatStrength * 2.5);
+        ctx.beginPath(); ctx.arc(cx, cy, Math.min(w, h) * (0.06 + beatStrength * 0.28), 0, Math.PI * 2); ctx.stroke();
         ctx.globalAlpha = 1;
       }
 
@@ -941,7 +984,13 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
             spectralCentroid: r.spectralCentroid,
             mood: r.mood as import('../lib/audioAnalysis').MoodLabel,
           });
-          setRecommendations(recommendEngines(r.mood as import('../lib/audioAnalysis').MoodLabel, r.bpm, 3));
+          setRecommendations(recommendEngines(
+            r.mood as import('../lib/audioAnalysis').MoodLabel,
+            r.bpm,
+            3,
+            r.avgEnergy,
+            r.spectralCentroid,
+          ));
         };
 
         // Main-thread fallback (used if Worker fails or is unsupported)
