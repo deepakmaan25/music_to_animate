@@ -207,7 +207,7 @@ function LandingApp() {
               AI-powered audio visualization
             </div>
 
-            <h1 className="text-6xl sm:text-7xl md:text-8xl font-black tracking-[-0.04em] mb-6 leading-[0.9]"
+            <h1 className="text-4xl sm:text-6xl md:text-7xl lg:text-8xl font-black tracking-[-0.04em] mb-6 leading-[0.9]"
               style={{ color: 'var(--text-strong)' }}>
               Your sound,<br />
               <span className="bg-clip-text text-transparent" style={{ backgroundImage: 'var(--hero-cta-gradient)' }}>
@@ -224,9 +224,9 @@ function LandingApp() {
             {/* ONE primary CTA */}
             <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
               onClick={() => openPicker()}
-              className="inline-flex items-center gap-3 px-8 h-14 rounded-2xl text-base font-semibold text-white"
+              className="inline-flex items-center gap-2 sm:gap-3 px-6 sm:px-8 h-12 sm:h-14 rounded-2xl text-sm sm:text-base font-semibold text-white"
               style={{ background: 'var(--hero-cta-gradient)', boxShadow: 'var(--accent-glow)' }}>
-              <Upload className="size-5" />
+              <Upload className="size-4 sm:size-5" />
               Upload your track
               <ArrowRight className="size-4 opacity-70" />
             </motion.button>
@@ -301,7 +301,7 @@ function LandingApp() {
               <AnimatePresence mode="wait">
                 <motion.div key={projectPage}
                   initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                  className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {pagedProjects.map((p, i) => (
                     <motion.div key={p.id}
                       initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
@@ -331,7 +331,7 @@ function LandingApp() {
               Three steps to magic.
             </h2>
           </div>
-          <div className="grid md:grid-cols-3 gap-5">
+          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5">
             {[
               { n: '01', title: 'Upload audio', body: 'Any MP3, WAV, or FLAC. Decoded entirely in your browser — nothing leaves your device.', icon: <Upload className="size-5" /> },
               { n: '02', title: 'Choose your engine', body: '9 visual styles tuned for different moods. Dial in color, motion speed, and beat sensitivity.', icon: <Palette className="size-5" /> },
@@ -367,7 +367,7 @@ function LandingApp() {
               9 distinct styles. Pick your vibe.
             </h2>
           </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {ENGINES.map((engine, i) => (
               <motion.div key={engine.id}
                 initial={{ opacity: 0, y: 12 }} whileInView={{ opacity: 1, y: 0 }}
@@ -420,14 +420,14 @@ function ProjectCard({ project, isSynced, onOpen, onRename, onDelete }: {
   };
 
   return (
-    <div className="group rounded-2xl border overflow-hidden transition-all hover:translate-y-[-2px] hover:shadow-lg"
+    <div className="rounded-2xl border overflow-hidden transition-all hover:translate-y-[-2px] hover:shadow-lg"
       style={{ background: 'var(--surface-elevated)', borderColor: 'var(--surface-glass-border)' }}>
       {/* Engine gradient header bar */}
       <div className="h-1 w-full" style={{ background: engine.gradient }} />
 
-      <div className="p-5">
+      <div className="p-4 sm:p-5">
         <div className="flex items-start gap-3 mb-4">
-          <div className="size-10 rounded-xl shrink-0 flex items-center justify-center text-white"
+          <div className="size-9 sm:size-10 rounded-xl shrink-0 flex items-center justify-center text-white"
             style={{ background: engine.gradient }}>
             <Music className="size-4" />
           </div>
@@ -465,16 +465,19 @@ function ProjectCard({ project, isSynced, onOpen, onRename, onDelete }: {
               </span>
             </div>
           </div>
-          {/* Delete icon — visible on hover */}
-          <button onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="size-7 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/10"
-            style={{ color: 'var(--text-muted)' }}>
+          {/* Delete — always visible, not hover-only (mobile needs tap, not hover) */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="size-8 rounded-lg flex items-center justify-center shrink-0 transition-colors hover:bg-red-500/15 active:bg-red-500/20"
+            style={{ color: 'var(--text-muted)' }}
+            title="Delete project"
+          >
             <Trash2 className="size-3.5" />
           </button>
         </div>
 
         {/* Metadata row */}
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
           <span className="text-[11px] px-2 py-0.5 rounded-md border font-medium"
             style={{ background: 'var(--surface-glass)', borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}>
             {engine.name}
@@ -487,9 +490,9 @@ function ProjectCard({ project, isSynced, onOpen, onRename, onDelete }: {
           )}
         </div>
 
-        {/* Primary action — full width */}
+        {/* Primary action */}
         <button onClick={onOpen}
-          className="w-full h-9 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-opacity hover:opacity-90"
+          className="w-full h-9 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-opacity hover:opacity-90 active:opacity-80"
           style={{ background: 'var(--hero-cta-gradient)' }}>
           <ExternalLink className="size-3.5" /> Open project
         </button>
