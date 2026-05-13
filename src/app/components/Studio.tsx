@@ -793,26 +793,23 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const newProj: Project = { id: `prj_${Date.now()}`, fileName: file.name, duration: audioBuffer.duration, audioBuffer, engine: initialEngine };
       setProject(newProj); setStatus('ready');
 
-      // ── Phase 9: offline analysis — runs in a Web Worker, never blocks UI ──
-      try {
-        // Extract channel data before passing to worker (AudioBuffer can't be transferred)
+      // ── Phase 9: offline analysis — Web Worker with main-thread fallback ──
+      (() => {
+        // Copy channel data out of AudioBuffer before any async boundary
         const channelData: Float32Array[] = [];
         for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
           channelData.push(new Float32Array(audioBuffer.getChannelData(ch)));
         }
 
-        const worker = new Worker(
-          new URL('../workers/analysisWorker.ts', import.meta.url),
-          { type: 'module' }
-        );
-
-        worker.onmessage = (e) => {
-          worker.terminate();
-          if (!e.data.ok) {
-            console.warn('[studio] analysis worker error:', e.data.error);
-            return;
-          }
-          const r = e.data;
+        const applyAnalysis = (r: {
+          sections: typeof import('../lib/audioAnalysis').analyzeTrackSections extends (...a: any[]) => infer R ? R : never;
+          energyCurve: number[];
+          energyCurveResolution: number;
+          bpm: number;
+          avgEnergy: number;
+          spectralCentroid: number;
+          mood: string;
+        }) => {
           sectionsRef.current       = r.sections;
           energyCurveRef.current    = new Float32Array(r.energyCurve);
           energyCurveResRef.current = r.energyCurveResolution;
@@ -823,26 +820,79 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
             bpm: r.bpm,
             avgEnergy: r.avgEnergy,
             spectralCentroid: r.spectralCentroid,
-            mood: r.mood,
+            mood: r.mood as import('../lib/audioAnalysis').MoodLabel,
           });
-          setRecommendations(recommendEngines(r.mood, r.bpm, 3));
+          setRecommendations(recommendEngines(r.mood as import('../lib/audioAnalysis').MoodLabel, r.bpm, 3));
         };
 
-        worker.onerror = (err) => {
-          console.warn('[studio] analysis worker failed:', err.message);
-          worker.terminate();
+        // Main-thread fallback (used if Worker fails or is unsupported)
+        const runOnMainThread = () => {
+          setTimeout(() => {
+            try {
+              const mockBuffer = {
+                sampleRate: audioBuffer.sampleRate,
+                length: channelData[0]?.length ?? 0,
+                duration: audioBuffer.duration,
+                numberOfChannels: channelData.length,
+                getChannelData: (ch: number) => channelData[ch] ?? new Float32Array(0),
+              } as unknown as AudioBuffer;
+              const analysis = analyzeTrack(mockBuffer);
+              applyAnalysis({
+                ...analysis,
+                energyCurve: Array.from(analysis.energyCurve),
+                mood: analysis.mood as string,
+              });
+            } catch (err) {
+              console.warn('[studio] main-thread analysis failed:', err);
+            }
+          }, 0);
         };
 
-        // Transfer buffers to worker (zero-copy)
-        const transferList = channelData.map(ch => ch.buffer);
-        worker.postMessage(
-          { channelData, sampleRate: audioBuffer.sampleRate, duration: audioBuffer.duration },
-          transferList
-        );
-      } catch (err) {
-        console.warn('[studio] could not start analysis worker:', err);
-      }
-      // ──────────────────────────────────────────────────────────────────────
+        // Try worker first
+        try {
+          const worker = new Worker(
+            new URL('../workers/analysisWorker.ts', import.meta.url),
+            { type: 'module' }
+          );
+
+          // 20 s watchdog — fall back to main thread if worker hangs
+          const watchdog = setTimeout(() => {
+            console.warn('[studio] worker watchdog fired — falling back to main thread');
+            worker.terminate();
+            runOnMainThread();
+          }, 20_000);
+
+          worker.onmessage = (e) => {
+            clearTimeout(watchdog);
+            worker.terminate();
+            if (!e.data.ok) {
+              console.warn('[studio] worker reported error:', e.data.error, '— falling back to main thread');
+              runOnMainThread();
+              return;
+            }
+            applyAnalysis(e.data);
+          };
+
+          worker.onerror = (err) => {
+            clearTimeout(watchdog);
+            console.warn('[studio] worker onerror — falling back to main thread:', err.message);
+            worker.terminate();
+            runOnMainThread();
+          };
+
+          // Transfer buffers to worker (zero-copy)
+          const transferList = channelData.map(ch => ch.buffer);
+          worker.postMessage(
+            { channelData, sampleRate: audioBuffer.sampleRate, duration: audioBuffer.duration },
+            transferList
+          );
+        } catch (err) {
+          // Worker not supported (e.g. some iOS WebViews) — fall back
+          console.warn('[studio] could not start worker — falling back to main thread:', err);
+          runOnMainThread();
+        }
+      })();
+      // ─────────────────────────────────────────────────────────────────────
 
        const audioMeta = { name: file.name, duration: audioBuffer.duration, sampleRate: audioBuffer.sampleRate };
  
