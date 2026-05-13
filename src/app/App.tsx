@@ -5,7 +5,6 @@ import {
   Heart, Music2, Clock, ArrowRight, Sun, Moon, Trash2, LogOut, Cloud,
   ChevronLeft, ChevronRight, FolderOpen, ExternalLink, FileVideo, Loader2
 } from 'lucide-react';
-import { Analytics } from '@vercel/analytics/react';
 import { Button } from './components/ui/button';
 import { Studio } from './components/Studio';
 import { AuthModal } from './components/AuthModal';
@@ -13,7 +12,7 @@ import { AuthCallback } from './components/AuthCallback';
 import { useTheme } from './hooks/useTheme';
 import { usePersistentProjects, type StoredProject } from './hooks/usePersistentProjects';
 import { useAuth } from './hooks/useAuth';
-import { fetchUserProjects, deleteDBProject, dbProjectToStored } from './lib/db';
+import { fetchUserProjects, deleteDBProject, dbProjectToStored, upsertProject } from './lib/db';
 
 type StudioEngine = 'bars' | 'radial' | 'depth' | 'orbital' | 'terrain' | 'tunnel' | 'neon_spheres' | 'fractal' | 'solar';
 
@@ -37,12 +36,7 @@ const PROJECTS_PER_PAGE = 6;
 
 export default function App() {
   if (typeof window !== 'undefined' && window.location.pathname === '/auth/callback') return <AuthCallback />;
-  return (
-    <>
-      <LandingApp />
-      <Analytics />
-    </>
-  );
+  return <LandingApp />;
 }
 
 function LandingApp() {
@@ -90,6 +84,23 @@ function LandingApp() {
     persist.deleteProject(id);
     setCloudProjectIds(prev => { const s = new Set(prev); s.delete(id); return s; });
     if (user?.id) await deleteDBProject(id);
+  }, [persist, user?.id]);
+
+  const handleRenameProject = useCallback(async (id: string, title: string) => {
+    persist.renameProject(id, title);
+    if (user?.id) {
+      const project = persist.projects[id];
+      if (!project) return;
+      await upsertProject({
+        id,
+        user_id: user.id,
+        title,
+        engine_id: project.engineId,
+        style_config: project.style as Record<string, unknown>,
+        motion_config: project.motion as Record<string, unknown>,
+        audio_meta: project.audioMeta,
+      });
+    }
   }, [persist, user?.id]);
   const handleSignOut = async () => {
     setSigningOut(true);
@@ -299,6 +310,7 @@ function LandingApp() {
                         project={p}
                         isSynced={cloudProjectIds.has(p.id)}
                         onOpen={() => openExisting(p.id)}
+                        onRename={(title) => handleRenameProject(p.id, title)}
                         onDelete={() => handleDeleteProject(p.id)}
                       />
                     </motion.div>
@@ -388,12 +400,24 @@ function LandingApp() {
 
 // ─── Project card ─────────────────────────────────────────────────────────────
 
-function ProjectCard({ project, isSynced, onOpen, onDelete }: {
-  project: StoredProject; isSynced: boolean; onOpen: () => void; onDelete: () => void;
+function ProjectCard({ project, isSynced, onOpen, onRename, onDelete }: {
+  project: StoredProject; isSynced: boolean; onOpen: () => void;
+  onRename: (title: string) => void; onDelete: () => void;
 }) {
   const fmt = (s: number) => `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
   const exportCount = Object.keys(project.exports).length;
   const engine = ENGINES.find(e => e.studio === project.engineId) ?? ENGINES[0];
+  const displayTitle = project.title ?? project.audioMeta.name.replace(/\.[^.]+$/, '');
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(displayTitle);
+
+  const commitRename = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== displayTitle) onRename(trimmed);
+    else setDraft(displayTitle); // revert if blank or unchanged
+    setEditing(false);
+  };
 
   return (
     <div className="group rounded-2xl border overflow-hidden transition-all hover:translate-y-[-2px] hover:shadow-lg"
@@ -408,9 +432,30 @@ function ProjectCard({ project, isSynced, onOpen, onDelete }: {
             <Music className="size-4" />
           </div>
           <div className="flex-1 min-w-0 pt-0.5">
-            <p className="font-semibold text-sm leading-snug truncate mb-1" style={{ color: 'var(--text-strong)' }}>
-              {project.audioMeta.name.replace(/\.[^.]+$/, '')}
-            </p>
+            {editing ? (
+              <input
+                autoFocus
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+                  if (e.key === 'Escape') { setDraft(displayTitle); setEditing(false); }
+                }}
+                onClick={e => e.stopPropagation()}
+                className="w-full text-sm font-semibold bg-transparent border-b outline-none mb-1 leading-snug"
+                style={{ color: 'var(--text-strong)', borderColor: 'var(--hero-cta-gradient)' }}
+              />
+            ) : (
+              <p
+                className="font-semibold text-sm leading-snug truncate mb-1 cursor-text"
+                title="Double-click to rename"
+                style={{ color: 'var(--text-strong)' }}
+                onDoubleClick={e => { e.stopPropagation(); setDraft(displayTitle); setEditing(true); }}
+              >
+                {displayTitle}
+              </p>
+            )}
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs flex items-center gap-1" style={{ color: 'var(--text-muted)' }}>
                 <Clock className="size-3" />{fmt(project.audioMeta.duration)}
