@@ -1,6 +1,14 @@
- 
 import { supabase } from './supabase';
- 
+
+// ─── JWT expiry detection ─────────────────────────────────────────────────────
+function isJwtExpired(error: unknown): boolean {
+  if (!error) return false;
+  const e = error as { code?: string; message?: string };
+  return e.code === 'PGRST301' || !!e.message?.includes('JWT expired') || !!e.message?.includes('JWTExpired');
+}
+
+export type DbWriteResult = { ok: boolean; expired: boolean };
+
 export type DBProject = {
   id: string;
   user_id: string;
@@ -42,7 +50,7 @@ export type DBExport = {
  
 export async function upsertProject(
   project: Omit<DBProject, 'created_at' | 'updated_at'>
-): Promise<boolean> {
+): Promise<DbWriteResult> {
   const { error } = await supabase
     .from('projects')
     .upsert(
@@ -51,44 +59,47 @@ export async function upsertProject(
     );
   if (error) {
     console.error('[db] upsertProject failed:', error.message, error.code);
-    return false;
+    return { ok: false, expired: isJwtExpired(error) };
   }
-  return true;
+  return { ok: true, expired: false };
 }
  
 export async function upsertTrack(
   track: Omit<DBTrack, 'created_at'>
-): Promise<boolean> {
+): Promise<DbWriteResult> {
   const { error } = await supabase
     .from('project_tracks')
     .upsert(track, { onConflict: 'project_id' });
   if (error) {
     console.error('[db] upsertTrack failed:', error.message, error.code);
-    return false;
+    return { ok: false, expired: isJwtExpired(error) };
   }
-  return true;
+  return { ok: true, expired: false };
 }
  
 export async function upsertExportRecord(
   exp: Omit<DBExport, 'created_at'>
-): Promise<boolean> {
+): Promise<DbWriteResult> {
   const { error } = await supabase
     .from('exports')
     .upsert(exp, { onConflict: 'id' });
   if (error) {
     console.error('[db] upsertExportRecord failed:', error.message, error.code);
-    return false;
+    return { ok: false, expired: isJwtExpired(error) };
   }
-  return true;
+  return { ok: true, expired: false };
 }
  
 export async function patchExportRecord(
   exportId: string,
   patch: Partial<Omit<DBExport, 'id' | 'user_id' | 'project_id' | 'created_at'>>
-): Promise<boolean> {
+): Promise<DbWriteResult> {
   const { error } = await supabase.from('exports').update(patch).eq('id', exportId);
-  if (error) { console.error('[db] patchExportRecord failed:', error.message); return false; }
-  return true;
+  if (error) {
+    console.error('[db] patchExportRecord failed:', error.message);
+    return { ok: false, expired: isJwtExpired(error) };
+  }
+  return { ok: true, expired: false };
 }
  
 export async function fetchUserProjects(userId: string): Promise<DBProject[]> {
