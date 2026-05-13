@@ -7,6 +7,7 @@ import {
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useAuth } from '../hooks/useAuth';
+import { supabase } from '../lib/supabase';
 
 const OTP_LENGTH     = 6;
 const RESEND_SECONDS = 60;
@@ -155,12 +156,43 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
     }, 1000);
   };
 
-  // ── Step: email ─────────────────────────────────────────────────────────────
-  const handleEmailContinue = (e: React.FormEvent) => {
+  // ── Step: email — check if account exists, route accordingly ───────────────
+  const handleEmailContinue = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!email.trim() || loading) return;
     setError(null);
-    setStep('password');
+    setLoading(true);
+
+    try {
+      // Attempt a silent OTP send with shouldCreateUser:false.
+      // If the user exists → no error → go to password step.
+      // If the user doesn't exist → Supabase returns an error → go to signup.
+      // This does NOT actually send an email — we only use the error to detect existence.
+      const { error: checkError } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+        options: { shouldCreateUser: false },
+      });
+
+      if (checkError) {
+        const msg = checkError.message.toLowerCase();
+        if (msg.includes('not found') || msg.includes('no user') || msg.includes('signup')) {
+          // New user — go straight to signup
+          setStep('signup');
+        } else {
+          // Existing user — go to password
+          setStep('password');
+        }
+      } else {
+        // Existing user — OTP was sent (costs 1 email), go to password
+        // but also offer the OTP they just received
+        setStep('password');
+      }
+    } catch {
+      // Fallback: just go to password step
+      setStep('password');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // ── Step: sign in with password ─────────────────────────────────────────────
@@ -186,13 +218,23 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
     if (password !== confirm) { setError('Passwords do not match.'); return; }
     setLoading(true); setError(null);
     try {
-      await signUpWithPassword(email.trim(), password);
-      setDigits(Array(OTP_LENGTH).fill(''));
-      setVerifyError(null); verifyingRef.current = false;
-      setOtpReason('verify_signup');
-      startCooldown();
-      setStep('otp');
-      setTimeout(() => inputRefs.current[0]?.focus(), 320);
+      const result = await signUpWithPassword(email.trim(), password);
+      // If email confirmation is OFF in Supabase, session is created immediately
+      // If email confirmation is ON, user.identities exists but session is null
+      const sessionCreated = !!result.session;
+      if (sessionCreated) {
+        // Confirmation off — signed in immediately, no OTP needed
+        setStep('success');
+        setTimeout(onClose, 1400);
+      } else {
+        // Confirmation on — need to verify email via OTP
+        setDigits(Array(OTP_LENGTH).fill(''));
+        setVerifyError(null); verifyingRef.current = false;
+        setOtpReason('verify_signup');
+        startCooldown();
+        setStep('otp');
+        setTimeout(() => inputRefs.current[0]?.focus(), 320);
+      }
     } catch (err: any) {
       setError(friendlyError(err));
     } finally {
@@ -335,8 +377,8 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
                       <Input type="email" required placeholder="you@example.com" autoComplete="email" autoFocus
                         value={email} onChange={(e) => setEmail(e.target.value)} className="pl-9 h-11" />
                     </div>
-                    <Button type="submit" className="w-full h-11 text-white" style={{ background: 'var(--hero-cta-gradient)' }}>
-                      Continue →
+                    <Button type="submit" disabled={loading || !email.trim()} className="w-full h-11 text-white" style={{ background: 'var(--hero-cta-gradient)' }}>
+                      {loading ? <><Loader2 className="size-4 animate-spin mr-2" />Checking…</> : 'Continue →'}
                     </Button>
                   </form>
                 </motion.div>
@@ -346,7 +388,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
               {step === 'password' && (
                 <motion.div key="password" {...fwd}>
                   <div className="flex items-center gap-1.5 mb-1">
-                    <button onClick={() => { setStep('email'); setError(null); setFailedAttempts(0); }}
+                    <button onClick={() => { setStep('email'); setError(null); }}
                       className="size-8 rounded-md hover:bg-black/5 flex items-center justify-center shrink-0">
                       <ArrowLeft className="size-4" />
                     </button>
