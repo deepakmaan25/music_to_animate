@@ -1,8 +1,4 @@
-// ─── engineRecommendations.ts ────────────────────────────────────────────────
-// Score each engine for the detected track characteristics.
-// Pure functions, no side effects, no imports beyond local types.
-// ─────────────────────────────────────────────────────────────────────────────
-
+// ─── engineRecommendations.ts ─────────────────────────────────────────────────
 import type { MoodLabel } from './audioAnalysis';
 
 export type EngineId =
@@ -11,95 +7,123 @@ export type EngineId =
 
 export interface EngineRecommendation {
   engineId: EngineId;
-  score: number;  // 0–1 normalised
+  score: number;   // 0–1 normalised
   reason: string;
 }
 
-// ─── Mood score matrix ────────────────────────────────────────────────────────
-// Row = engine, column = mood (aggressive | euphoric | calm | dark | bright)
+// ─── Mood base scores ─────────────────────────────────────────────────────────
+// Deliberately spread to create clear winners per mood
 const MOOD_SCORES: Record<EngineId, Record<MoodLabel, number>> = {
-  tunnel:      { aggressive: 0.90, euphoric: 0.70, calm: 0.20, dark: 0.60, bright: 0.50 },
-  depth:       { aggressive: 0.70, euphoric: 0.90, calm: 0.60, dark: 0.70, bright: 0.80 },
-  fractal:     { aggressive: 0.80, euphoric: 0.80, calm: 0.40, dark: 0.90, bright: 0.60 },
-  radial:      { aggressive: 0.90, euphoric: 0.70, calm: 0.30, dark: 0.50, bright: 0.70 },
-  neon_spheres:{ aggressive: 0.60, euphoric: 0.90, calm: 0.50, dark: 0.60, bright: 0.90 },
-  bars:        { aggressive: 0.70, euphoric: 0.60, calm: 0.50, dark: 0.50, bright: 0.70 },
-  orbital:     { aggressive: 0.50, euphoric: 0.70, calm: 0.90, dark: 0.70, bright: 0.60 },
-  terrain:     { aggressive: 0.40, euphoric: 0.50, calm: 0.90, dark: 0.80, bright: 0.50 },
-  solar:       { aggressive: 0.30, euphoric: 0.60, calm: 0.80, dark: 0.70, bright: 0.60 },
+  tunnel:       { aggressive: 0.95, euphoric: 0.65, calm: 0.15, dark: 0.70, bright: 0.45 },
+  depth:        { aggressive: 0.60, euphoric: 0.85, calm: 0.65, dark: 0.75, bright: 0.75 },
+  fractal:      { aggressive: 0.85, euphoric: 0.75, calm: 0.30, dark: 0.95, bright: 0.55 },
+  radial:       { aggressive: 0.90, euphoric: 0.65, calm: 0.25, dark: 0.45, bright: 0.65 },
+  neon_spheres: { aggressive: 0.45, euphoric: 0.95, calm: 0.55, dark: 0.50, bright: 0.95 },
+  bars:         { aggressive: 0.75, euphoric: 0.55, calm: 0.45, dark: 0.45, bright: 0.70 },
+  orbital:      { aggressive: 0.40, euphoric: 0.65, calm: 0.95, dark: 0.75, bright: 0.55 },
+  terrain:      { aggressive: 0.35, euphoric: 0.40, calm: 0.90, dark: 0.85, bright: 0.40 },
+  solar:        { aggressive: 0.25, euphoric: 0.55, calm: 0.85, dark: 0.65, bright: 0.55 },
 };
 
-// ─── BPM adjustment ───────────────────────────────────────────────────────────
-// Engines that suit high-tempo or slow-tempo tracks get a bonus
-const BPM_BONUS: Partial<Record<EngineId, { highBPM?: number; lowBPM?: number }>> = {
-  tunnel:       { highBPM: 0.10 },
-  radial:       { highBPM: 0.10 },
-  depth:        { highBPM: 0.08 },
-  fractal:      { highBPM: 0.08 },
-  terrain:      { lowBPM: 0.10 },
-  solar:        { lowBPM: 0.10 },
-  orbital:      { lowBPM: 0.08 },
+// ─── BPM bonuses — large enough to actually change the ranking ────────────────
+const BPM_HIGH = 128;  // >128 = fast
+const BPM_LOW  = 90;   // <90 = slow
+const BPM_MID_LO = 90, BPM_MID_HI = 128; // 90-128 = mid
+
+const BPM_BONUS: Partial<Record<EngineId, {
+  highBPM?: number; midBPM?: number; lowBPM?: number
+}>> = {
+  tunnel:       { highBPM: 0.35 },
+  radial:       { highBPM: 0.28 },
+  fractal:      { highBPM: 0.22 },
+  bars:         { highBPM: 0.18, midBPM: 0.10 },
+  depth:        { midBPM: 0.20 },
+  neon_spheres: { midBPM: 0.18 },
+  terrain:      { lowBPM: 0.32 },
+  solar:        { lowBPM: 0.28 },
+  orbital:      { lowBPM: 0.22 },
 };
 
-// ─── Human-readable reason strings ───────────────────────────────────────────
-function buildReason(engineId: EngineId, mood: MoodLabel, bpm: number): string {
-  const bpmDesc = bpm > 128 ? 'high BPM' : bpm < 90 ? 'slow tempo' : 'mid-tempo';
-  const moodDesc: Record<MoodLabel, string> = {
-    aggressive: 'aggressive energy',
-    euphoric:   'euphoric energy',
-    calm:       'calm, ambient feel',
-    dark:       'dark, brooding tone',
-    bright:     'bright, upbeat character',
+// ─── Energy bonuses ───────────────────────────────────────────────────────────
+// High avgEnergy → reactive engines; Low avgEnergy → ambient engines
+const HIGH_ENERGY_BONUS: Partial<Record<EngineId, number>> = {
+  tunnel: 0.15, radial: 0.12, bars: 0.10, fractal: 0.08,
+};
+const LOW_ENERGY_BONUS: Partial<Record<EngineId, number>> = {
+  terrain: 0.15, solar: 0.12, orbital: 0.10, depth: 0.08,
+};
+
+// ─── Spectral centroid bonuses ───────────────────────────────────────────────
+// High centroid = bright/treble-heavy → engines with fine detail read better
+const HIGH_CENTROID_BONUS: Partial<Record<EngineId, number>> = {
+  neon_spheres: 0.12, fractal: 0.10, depth: 0.08,
+};
+const LOW_CENTROID_BONUS: Partial<Record<EngineId, number>> = {
+  terrain: 0.12, tunnel: 0.08, bars: 0.08,
+};
+
+// ─── Reason strings ───────────────────────────────────────────────────────────
+function buildReason(
+  id: EngineId, mood: MoodLabel, bpm: number,
+  avgEnergy: number, spectralCentroid: number,
+): string {
+  const bpmStr = bpm > BPM_HIGH ? `${bpm} BPM (fast)` : bpm < BPM_LOW ? `${bpm} BPM (slow)` : `${bpm} BPM`;
+  const energyStr = avgEnergy > 0.65 ? 'high energy' : avgEnergy < 0.35 ? 'soft energy' : 'mid energy';
+  const notes: Record<EngineId, string> = {
+    tunnel:       'tunnel depth amplifies fast, driving tracks',
+    depth:        'starfield rushes with every beat transient',
+    fractal:      'kaleidoscope complexity suits dark, layered music',
+    radial:       'radial bursts fire sharply on percussive hits',
+    neon_spheres: 'spheres bounce and glow with melodic movement',
+    bars:         'spectrum bars reveal every frequency in the mix',
+    orbital:      'orbital motion flows well with sustained ambient sound',
+    terrain:      'terrain waves rise with bass and rhythm slowly',
+    solar:        'planetary orbits match gentle, evolving builds',
   };
-  const engineNotes: Record<EngineId, string> = {
-    tunnel:       'the tunnel depth amplifies drive and momentum',
-    depth:        'the starfield responds beautifully to rhythm',
-    fractal:      'kaleidoscope patterns match complex energy well',
-    radial:       'radial bursts complement percussive transients',
-    neon_spheres: 'bouncing spheres mirror melodic energy',
-    bars:         'spectrum bars make every frequency visible',
-    orbital:      'orbital motion suits sustained, evolving sounds',
-    terrain:      'terrain rises with low, powerful frequencies',
-    solar:        'planetary motion works well with slow builds',
-  };
-  return `${moodDesc[mood]} + ${bpmDesc} — ${engineNotes[engineId]}`;
+  return `${mood} mood · ${bpmStr} · ${energyStr} — ${notes[id]}`;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Return the top N engine recommendations sorted by score descending.
- * Scores are normalised so the highest is 1.0.
- */
+// ─── Main export ──────────────────────────────────────────────────────────────
 export function recommendEngines(
   mood: MoodLabel,
   bpm: number,
-  topN = 3
+  topN = 3,
+  avgEnergy = 0.5,
+  spectralCentroid = 0.5,
 ): EngineRecommendation[] {
   const engines = Object.keys(MOOD_SCORES) as EngineId[];
 
   const raw = engines.map((id) => {
     let score = MOOD_SCORES[id][mood];
 
-    // BPM bonus
-    const bonus = BPM_BONUS[id];
-    if (bonus) {
-      if (bonus.highBPM && bpm > 128) score += bonus.highBPM;
-      if (bonus.lowBPM  && bpm < 90)  score += bonus.lowBPM;
+    // BPM — these bonuses are large enough to flip rankings
+    const bpmBonus = BPM_BONUS[id];
+    if (bpmBonus) {
+      if (bpmBonus.highBPM && bpm > BPM_HIGH) score += bpmBonus.highBPM;
+      if (bpmBonus.lowBPM  && bpm < BPM_LOW)  score += bpmBonus.lowBPM;
+      if (bpmBonus.midBPM  && bpm >= BPM_MID_LO && bpm <= BPM_MID_HI) score += bpmBonus.midBPM;
     }
 
-    return { engineId: id, score, reason: buildReason(id, mood, bpm) };
+    // Energy
+    if (avgEnergy > 0.60) score += HIGH_ENERGY_BONUS[id] ?? 0;
+    if (avgEnergy < 0.38) score += LOW_ENERGY_BONUS[id]  ?? 0;
+
+    // Spectral centroid
+    if (spectralCentroid > 0.60) score += HIGH_CENTROID_BONUS[id] ?? 0;
+    if (spectralCentroid < 0.40) score += LOW_CENTROID_BONUS[id]  ?? 0;
+
+    return {
+      engineId: id,
+      score,
+      reason: buildReason(id, mood, bpm, avgEnergy, spectralCentroid),
+    };
   });
 
-  // Sort descending
   raw.sort((a, b) => b.score - a.score);
 
-  // Normalise so max = 1.0
   const maxScore = raw[0]?.score ?? 1;
-  const normalised = raw.map((r) => ({
+  return raw.slice(0, topN).map(r => ({
     ...r,
     score: maxScore > 0 ? r.score / maxScore : r.score,
   }));
-
-  return normalised.slice(0, topN);
 }
