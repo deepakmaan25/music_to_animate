@@ -164,6 +164,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [showSignInNudge, setShowSignInNudge] = useState(false);
   const [trackAnalysis, setTrackAnalysis] = useState<TrackAnalysis | null>(null);
   const [recommendations, setRecommendations] = useState<EngineRecommendation[]>([]);
+  const [activeTab, setActiveTab]     = useState<string>('style');
 
   // ── Live-param refs (RAF closure safety) ──────────────────────────────────
   const engineRef          = useRef<EngineId>(engine);
@@ -792,19 +793,55 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const newProj: Project = { id: `prj_${Date.now()}`, fileName: file.name, duration: audioBuffer.duration, audioBuffer, engine: initialEngine };
       setProject(newProj); setStatus('ready');
 
-      // ── Phase 9: offline analysis (non-blocking, runs after render) ────────
-      setTimeout(() => {
-        try {
-          const analysis = analyzeTrack(audioBuffer);
-          sectionsRef.current       = analysis.sections;
-          energyCurveRef.current    = analysis.energyCurve;
-          energyCurveResRef.current = analysis.energyCurveResolution;
-          setTrackAnalysis(analysis);
-          setRecommendations(recommendEngines(analysis.mood, analysis.bpm, 3));
-        } catch (err) {
-          console.warn('[studio] offline analysis failed (non-fatal):', err);
+      // ── Phase 9: offline analysis — runs in a Web Worker, never blocks UI ──
+      try {
+        // Extract channel data before passing to worker (AudioBuffer can't be transferred)
+        const channelData: Float32Array[] = [];
+        for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+          channelData.push(new Float32Array(audioBuffer.getChannelData(ch)));
         }
-      }, 0);
+
+        const worker = new Worker(
+          new URL('../workers/analysisWorker.ts', import.meta.url),
+          { type: 'module' }
+        );
+
+        worker.onmessage = (e) => {
+          worker.terminate();
+          if (!e.data.ok) {
+            console.warn('[studio] analysis worker error:', e.data.error);
+            return;
+          }
+          const r = e.data;
+          sectionsRef.current       = r.sections;
+          energyCurveRef.current    = new Float32Array(r.energyCurve);
+          energyCurveResRef.current = r.energyCurveResolution;
+          setTrackAnalysis({
+            sections: r.sections,
+            energyCurve: new Float32Array(r.energyCurve),
+            energyCurveResolution: r.energyCurveResolution,
+            bpm: r.bpm,
+            avgEnergy: r.avgEnergy,
+            spectralCentroid: r.spectralCentroid,
+            mood: r.mood,
+          });
+          setRecommendations(recommendEngines(r.mood, r.bpm, 3));
+        };
+
+        worker.onerror = (err) => {
+          console.warn('[studio] analysis worker failed:', err.message);
+          worker.terminate();
+        };
+
+        // Transfer buffers to worker (zero-copy)
+        const transferList = channelData.map(ch => ch.buffer);
+        worker.postMessage(
+          { channelData, sampleRate: audioBuffer.sampleRate, duration: audioBuffer.duration },
+          transferList
+        );
+      } catch (err) {
+        console.warn('[studio] could not start analysis worker:', err);
+      }
       // ──────────────────────────────────────────────────────────────────────
 
        const audioMeta = { name: file.name, duration: audioBuffer.duration, sampleRate: audioBuffer.sampleRate };
@@ -973,6 +1010,7 @@ if (dbExports.length > 0) {
       preset: preset.name, aspect, status: 'recording', progress: 0,
     };
     setExports((x) => [...x, job]);
+    setActiveTab('export'); // show progress immediately
 
     if (persist && persistedId) {
       persist.addExport(persistedId, {
@@ -1055,6 +1093,8 @@ if (dbExports.length > 0) {
           j.id === job.id ? { ...j, status: 'done', progress: 100, url, blob, size: blob.size } : j
         )
       );
+      // Auto-switch to History tab so user immediately sees the download button
+      setActiveTab('exports');
  
       // Local persist (existing)
       if (persist && persistedId) {
@@ -1268,7 +1308,7 @@ if (dbExports.length > 0) {
  
         {/* Right: tabbed control panel (scrollable within itself) */}
         <div className="flex-1 min-h-0 border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col overflow-hidden lg:w-[340px] xl:w-[360px] lg:flex-none">
-          <Tabs defaultValue="style" className="flex flex-col h-full">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
             <TabsList className="grid grid-cols-5 w-full bg-white/5 rounded-none border-b border-white/10 shrink-0 h-10">
               <TabsTrigger value="style"   className="text-[10px] sm:text-xs">Style</TabsTrigger>
               <TabsTrigger value="motion"  className="text-[10px] sm:text-xs">Motion</TabsTrigger>
