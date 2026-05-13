@@ -137,6 +137,12 @@ export async function deleteDBProject(projectId: string): Promise<boolean> {
   if (error) { console.error('[db] deleteDBProject failed:', error.message); return false; }
   return true;
 }
+
+export async function deleteDBExport(exportId: string): Promise<boolean> {
+  const { error } = await supabase.from('exports').delete().eq('id', exportId);
+  if (error) { console.error('[db] deleteDBExport failed:', error.message); return false; }
+  return true;
+}
  
 export function dbProjectToStored(p: DBProject) {
   return {
