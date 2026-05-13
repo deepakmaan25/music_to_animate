@@ -42,7 +42,7 @@ export function useAuth() {
   const sendOtp = async (email: string) => {
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: false },
+      options: { shouldCreateUser: true },  // works for both new and existing users
     });
     if (error) throw error;
   };
