@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { upsertProject, upsertTrack, upsertExportRecord, patchExportRecord } from '../lib/db';
 import { uploadAudioFile, uploadExportBlob } from '../lib/storage';
 
@@ -22,6 +22,12 @@ export type ExportSyncParams = {
 
 export function useSupabaseSync(userId: string | undefined) {
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  // Auto-clear expiry flag when user signs back in
+  useEffect(() => {
+    if (userId) setSessionExpired(false);
+  }, [userId]);
 
   useEffect(() => {
     return () => {
@@ -46,7 +52,7 @@ export function useSupabaseSync(userId: string | undefined) {
       const timer = setTimeout(async () => {
         timersRef.current.delete(projectId);
         const title = config.audioMeta.name.replace(/\.[^.]+$/, '') || 'Untitled';
-        const ok = await upsertProject({
+        const { expired } = await upsertProject({
           id: projectId,
           user_id: userId,
           title,
@@ -55,6 +61,7 @@ export function useSupabaseSync(userId: string | undefined) {
           motion_config: config.motion as Record<string, unknown>,
           audio_meta: config.audioMeta,
         });
+        if (expired) setSessionExpired(true);
       }, 1500);
 
       timersRef.current.set(projectId, timer);
@@ -87,7 +94,7 @@ const uploadAudio = useCallback(
 
       const title = audioMeta.name.replace(/\.[^.]+$/, '') || 'Untitled';
 
-      const projectOk = await upsertProject({
+      const { ok: projectOk, expired: projectExpired } = await upsertProject({
         id: projectId,
         user_id: resolvedUserId,
         title,
@@ -97,6 +104,7 @@ const uploadAudio = useCallback(
         audio_meta: audioMeta,
       });
 
+      if (projectExpired) setSessionExpired(true);
       if (!projectOk) {
         console.error('[sync] uploadAudio — project upsert failed, aborting track upload');
         return null;
@@ -108,7 +116,7 @@ const uploadAudio = useCallback(
         return null;
       }
 
-      await upsertTrack({
+      const { expired: trackExpired } = await upsertTrack({
         project_id: projectId,
         user_id: resolvedUserId,
         storage_path: storagePath,
@@ -117,6 +125,7 @@ const uploadAudio = useCallback(
         file_size: file.size,
         duration: audioMeta.duration,
       });
+      if (trackExpired) setSessionExpired(true);
 
       return storagePath;
     },
@@ -132,7 +141,7 @@ const uploadAudio = useCallback(
 
       const { exportId, exportType, aspectRatio, resolution, qualityPreset, durationSecs, blob, sizeBytes } = params;
 
-      await upsertExportRecord({
+      const { expired } = await upsertExportRecord({
         id: exportId,
         user_id: userId,
         project_id: projectId,
@@ -145,12 +154,14 @@ const uploadAudio = useCallback(
         size_bytes: sizeBytes,
         status: 'ready',
       });
+      if (expired) setSessionExpired(true);
 
       if (blob) {
         uploadExportBlob(userId, projectId, exportId, blob, exportType as 'webm' | 'mp4')
-          .then((storagePath) => {
+          .then(async (storagePath) => {
             if (storagePath) {
-              patchExportRecord(exportId, { storage_path: storagePath });
+              const { expired: patchExpired } = await patchExportRecord(exportId, { storage_path: storagePath });
+              if (patchExpired) setSessionExpired(true);
             }
           })
           .catch((err) => console.error('[sync] export blob upload failed:', err));
@@ -159,5 +170,7 @@ const uploadAudio = useCallback(
     [userId]
   );
 
-  return { saveConfig, uploadAudio, saveExport };
+  const clearExpiredFlag = useCallback(() => setSessionExpired(false), []);
+
+  return { saveConfig, uploadAudio, saveExport, sessionExpired, clearExpiredFlag };
 }
