@@ -31,6 +31,11 @@ export default defineConfig({
     },
   },
 
+  // Web Worker bundling — required for analysisWorker.ts to work in production
+  worker: {
+    format: 'es',
+  },
+
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 })
