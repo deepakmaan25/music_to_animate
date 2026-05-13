@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Play, Pause, Upload, Download, ArrowLeft, RotateCw, FileVideo, Check,
-        Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff, Cloud, X } from 'lucide-react';
+        Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff, Cloud, X, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
@@ -10,8 +10,8 @@ import { AuthModal } from './AuthModal';
 import type { usePersistentProjects } from '../hooks/usePersistentProjects';
 import { useAuth } from '../hooks/useAuth';
 import { useSupabaseSync } from '../hooks/useSupabaseSync';
-import { fetchProjectTrack, fetchProjectExports } from '../lib/db';
-import { getAudioSignedUrl } from '../lib/storage';
+import { fetchProjectTrack, fetchProjectExports, deleteDBExport } from '../lib/db';
+import { getAudioSignedUrl, getExportSignedUrl } from '../lib/storage';
 import {
   analyzeTrack,
   getSectionAtTime,
@@ -58,6 +58,8 @@ type Project = {
 
 type ExportJob = {
   id: number;
+  storageId?: string;    // original DB/export ID (string) for delete + cloud download
+  storagePath?: string;  // Supabase storage path for re-downloading from cloud
   name: string;
   preset: string;
   aspect: string;
@@ -613,7 +615,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const energy = bass * 0.5 + mids * 0.35 + highs * 0.15;
       solarTRef.current += (0.008 + energy * 0.04 * sens) * energyMult;
       const cx = w / 2, cy = h / 2;
-      const zoom = 1 + bass * sens * 0.4 * sectionIntensity;
+      const zoom = Math.min(1.22, 1 + bass * sens * 0.35 * sectionIntensity);
       const segs = 8;
       ctx.save();
       ctx.translate(cx, cy);
@@ -876,12 +878,13 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 if (dbExports.length > 0) {
         const restored: ExportJob[] = dbExports.map((e) => ({
           id: Number(e.id) || Date.now(),
+          storageId: e.id,
+          storagePath: e.storage_path,
           name: `${track.filename.replace(/\.[^.]+$/, '')}_${e.aspect_ratio?.replace(':', 'x') ?? ''}_${e.quality_preset ?? ''}`,
           preset: e.quality_preset ?? '',
           aspect: e.aspect_ratio ?? '9:16',
           status: 'done' as const,
           progress: 100,
-          // No local blob URL available — show cloud indicator instead
           url: undefined,
           size: e.size_bytes ?? undefined,
         }));
@@ -1096,6 +1099,29 @@ if (dbExports.length > 0) {
   };   
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Export management
+  // ─────────────────────────────────────────────────────────────────────────
+  const deleteExport = (jobId: number, storageId?: string) => {
+    setExports((x) => x.filter((j) => j.id !== jobId));
+    if (storageId) deleteDBExport(storageId).catch(() => {});
+    if (persist && persistedId) persist.updateExport(persistedId, String(jobId), { status: 'error' });
+  };
+
+  const downloadCloudExport = async (job: ExportJob) => {
+    if (!job.storagePath) return;
+    setExports((x) => x.map((j) => j.id === job.id ? { ...j, status: 'recording' } : j)); // show loading
+    const url = await getExportSignedUrl(job.storagePath, 3600);
+    if (url) {
+      const a = document.createElement('a');
+      a.href = url;
+      const ext = job.storagePath.endsWith('.mp4') ? 'mp4' : 'webm';
+      a.download = `${job.name}.${ext}`;
+      a.click();
+    }
+    setExports((x) => x.map((j) => j.id === job.id ? { ...j, status: 'done' } : j));
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────
   const fmt = (s: number) => {
@@ -1147,10 +1173,11 @@ if (dbExports.length > 0) {
       </div>
  
       {/* ── Main content (fills remaining viewport) ─────────────── */}
-      <div className="flex-1 grid lg:grid-cols-[1fr_360px] min-h-0 overflow-hidden">
+      {/* empty */}
+      <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
  
-        {/* Left: canvas + transport (no scroll) */}
-        <div className="flex flex-col min-h-0 p-4 gap-3 overflow-hidden">
+        {/* Left: canvas + transport — fixed height on mobile, flex-1 on desktop */}
+        <div className="flex flex-col shrink-0 lg:flex-1 p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden h-[260px] sm:h-[300px] lg:h-auto">
  
           {/* Canvas — grows to fill, constrained by aspect ratio */}
           <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-black border border-white/10">
@@ -1239,7 +1266,7 @@ if (dbExports.length > 0) {
         </div>
  
         {/* Right: tabbed control panel (scrollable within itself) */}
-        <div className="border-l border-white/10 flex flex-col min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col overflow-hidden lg:w-[360px] lg:flex-none">
           <Tabs defaultValue="style" className="flex flex-col h-full">
             <TabsList className="grid grid-cols-5 w-full bg-white/5 rounded-none border-b border-white/10 shrink-0 h-10">
               <TabsTrigger value="style" className="text-xs">Style</TabsTrigger>
@@ -1422,7 +1449,9 @@ if (dbExports.length > 0) {
                 ) : (
                   <div className="space-y-2">
                     {exports.map((j) => {
-                      const ext = exportMode === 'mp4' ? 'mp4' : 'webm';
+                      const ext = j.storagePath?.endsWith('.mp4') ? 'mp4'
+                                : exportMode === 'mp4' ? 'mp4' : 'webm';
+                      const isCloud = !j.url && !!j.storagePath;
                       return (
                         <div key={j.id} className="rounded-xl border bg-white/5 border-white/10 p-3">
                           <div className="flex items-start gap-2.5 mb-2">
@@ -1433,6 +1462,16 @@ if (dbExports.length > 0) {
                               <div className="text-xs font-semibold truncate">{j.name}.{ext}</div>
                               <div className="text-[11px] text-gray-400">{j.preset} · {j.aspect}{j.size ? ` · ${(j.size / (1024 * 1024)).toFixed(1)} MB` : ''}</div>
                             </div>
+                            {/* Delete button — always visible */}
+                            {(j.status === 'done' || j.status === 'error') && (
+                              <button
+                                onClick={() => deleteExport(j.id, j.storageId)}
+                                className="size-6 flex items-center justify-center rounded hover:bg-red-500/15 text-gray-500 hover:text-red-400 transition-colors shrink-0"
+                                title="Delete export"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </button>
+                            )}
                             {j.status !== 'done' && j.status !== 'error' && (
                               <Badge className="bg-amber-500/20 border-amber-400/30 text-amber-200 capitalize text-[10px]">{j.status}</Badge>
                             )}
@@ -1450,6 +1489,7 @@ if (dbExports.length > 0) {
                           {j.status === 'done' && (
                             <div className="flex gap-2">
                               {j.url ? (
+                                /* Local blob available — direct download */
                                 <>
                                   <a href={j.url} download={`${j.name}.${ext}`} className="flex-1">
                                     <Button size="sm" className="w-full bg-white text-gray-900 hover:bg-gray-100 h-7 text-xs">
@@ -1459,12 +1499,19 @@ if (dbExports.length > 0) {
                                   <Button size="sm" variant="outline"
                                     className="border-white/20 text-white hover:bg-white/10 h-7 text-xs flex-1"
                                     onClick={() => navigator.clipboard?.writeText(j.url!)}>
-                                    <Share2 className="size-3 mr-1" /> Copy
+                                    <Share2 className="size-3 mr-1" /> Copy link
                                   </Button>
                                 </>
+                              ) : isCloud ? (
+                                /* Cloud-stored export — re-generate signed URL */
+                                <Button size="sm"
+                                  className="flex-1 bg-white/10 hover:bg-white/15 text-white h-7 text-xs border border-white/20"
+                                  onClick={() => downloadCloudExport(j)}>
+                                  <Cloud className="size-3 mr-1" /> Download from cloud
+                                </Button>
                               ) : (
-                                <span className="text-[11px] text-gray-400 flex items-center gap-1">
-                                  <Cloud className="size-3" /> saved to cloud
+                                <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                                  <CloudOff className="size-3" /> No file available
                                 </span>
                               )}
                             </div>
