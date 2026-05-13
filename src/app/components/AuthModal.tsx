@@ -123,8 +123,6 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [newPwd, setNewPwd]     = useState('');
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
-  // Track failed sign-in attempts to surface OTP option prominently
-  const [failedAttempts, setFailedAttempts] = useState(0);
 
   // OTP state
   const [digits, setDigits]           = useState<string[]>(Array(OTP_LENGTH).fill(''));
@@ -140,7 +138,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
     if (!open) {
       const t = setTimeout(() => {
         setStep('email'); setEmail(''); setPassword(''); setConfirm(''); setNewPwd('');
-        setLoading(false); setError(null); setFailedAttempts(0);
+        setLoading(false); setError(null);
         setDigits(Array(OTP_LENGTH).fill('')); setVerifying(false); setVerifyError(null);
         verifyingRef.current = false; setCooldown(0);
         if (cooldownRef.current) clearInterval(cooldownRef.current);
@@ -161,7 +159,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
   const handleEmailContinue = (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim()) return;
-    setError(null); setFailedAttempts(0);
+    setError(null);
     setStep('password');
   };
 
@@ -175,7 +173,6 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
       setStep('success');
       setTimeout(onClose, 1400);
     } catch (err: any) {
-      setFailedAttempts((n) => n + 1);
       setError(friendlyError(err));
     } finally {
       setLoading(false);
@@ -378,42 +375,19 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
                     </Button>
                   </form>
 
-                  {/* After first failure, make OTP prominent */}
-                  {failedAttempts >= 1 ? (
-                    <div className="mt-4 pt-3 border-t space-y-2" style={{ borderColor: 'var(--surface-glass-border)' }}>
-                      <p className="text-xs text-center" style={{ color: 'var(--text-muted)' }}>
-                        Signed up with a code and never set a password?
-                      </p>
-                      <Button variant="outline" onClick={handleSendOtp} disabled={loading}
-                        className="w-full h-9 text-xs border-purple-400/30 text-purple-300 hover:bg-purple-500/10">
-                        {loading ? <Loader2 className="size-3.5 animate-spin mr-2" /> : <Mail className="size-3.5 mr-2" />}
-                        Sign in with email code instead
-                      </Button>
-                      <div className="flex items-center justify-between">
-                        <button onClick={() => { setStep('signup'); setPassword(''); setConfirm(''); setError(null); }}
-                          className="text-xs hover:underline" style={{ color: 'var(--text-muted)' }}>
-                          New user? Create account
-                        </button>
-                        <button onClick={handleForgotPassword} disabled={loading}
-                          className="text-xs hover:underline disabled:opacity-40" style={{ color: 'var(--text-muted)' }}>
-                          Forgot / set password
-                        </button>
-                      </div>
+                  {/* Always show the same small text links — no conditional */}
+                  <div className="flex items-center justify-between mt-4 pt-3 border-t text-xs"
+                    style={{ borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}>
+                    <button onClick={() => { setStep('signup'); setPassword(''); setConfirm(''); setError(null); }}
+                      className="hover:underline">New user? Create account</button>
+                    <div className="flex items-center gap-3">
+                      <button onClick={handleForgotPassword} disabled={loading}
+                        className="hover:underline disabled:opacity-40">Forgot password?</button>
+                      <span style={{ color: 'var(--surface-glass-border)' }}>·</span>
+                      <button onClick={handleSendOtp} disabled={loading}
+                        className="hover:underline disabled:opacity-40">Use a code</button>
                     </div>
-                  ) : (
-                    <div className="flex items-center justify-between mt-4 pt-3 border-t text-xs"
-                      style={{ borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}>
-                      <button onClick={() => { setStep('signup'); setPassword(''); setConfirm(''); setError(null); }}
-                        className="hover:underline">New user? Create account</button>
-                      <div className="flex items-center gap-3">
-                        <button onClick={handleForgotPassword} disabled={loading}
-                          className="hover:underline disabled:opacity-40">Forgot password?</button>
-                        <span style={{ color: 'var(--surface-glass-border)' }}>·</span>
-                        <button onClick={handleSendOtp} disabled={loading}
-                          className="hover:underline disabled:opacity-40">Use a code</button>
-                      </div>
-                    </div>
-                  )}
+                  </div>
                 </motion.div>
               )}
 
