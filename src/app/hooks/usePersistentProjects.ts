@@ -20,6 +20,7 @@ export type StoredProject = {
   id: string;
   createdAt: number;
   updatedAt: number;
+  title?: string;        // user-editable; falls back to audioMeta.name when absent
   audioMeta: {
     name: string;
     duration: number;
@@ -137,6 +138,19 @@ export function usePersistentProjects() {
     });
   }, []);
 
+  const renameProject = useCallback((id: string, title: string) => {
+    setStore((s) => {
+      const cur = s.projects[id];
+      if (!cur) return s;
+      const trimmed = title.trim();
+      if (!trimmed) return s; // refuse blank titles
+      return {
+        ...s,
+        projects: { ...s.projects, [id]: { ...cur, title: trimmed, updatedAt: Date.now() } }
+      };
+    });
+  }, []);
+
   const deleteProject = useCallback((id: string) => {
     setStore((s) => {
       const next = { ...s.projects };
@@ -160,6 +174,7 @@ export function usePersistentProjects() {
     importProject,
     addExport,
     updateExport,
+    renameProject,
     deleteProject,
     setLastOpened
   };
