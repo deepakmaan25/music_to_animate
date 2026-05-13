@@ -123,6 +123,26 @@ function hexToRgb(hex: string) {
   return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
 }
 
+/**
+ * Shift a hex colour's intensity based on section energy.
+ * intensity 0.25 (breakdown) → ~0.6× = muted
+ * intensity 0.5  (verse)     → ~1.0× = unchanged
+ * intensity 1.0  (drop)      → ~1.4× = vivid
+ */
+function shiftColorIntensity(hex: string, intensity: number): string {
+  try {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    // neutral at intensity=0.5 → scale=1.0; drop at 1.0 → scale=1.4; breakdown at 0.25 → scale=0.6
+    const scale = 0.2 + intensity * 1.6;
+    const nr = Math.min(255, Math.round(r * scale));
+    const ng = Math.min(255, Math.round(g * scale));
+    const nb = Math.min(255, Math.round(b * scale));
+    return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`;
+  } catch { return hex; }
+}
+
 type Persist = ReturnType<typeof usePersistentProjects>;
 
 type StudioProps = {
@@ -178,6 +198,15 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
   // ── Audio refs ─────────────────────────────────────────────────────────────
   const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const cameraWrapperRef = useRef<HTMLDivElement>(null);
+
+  // Camera system refs — written every RAF frame, zero React renders
+  const cameraZoomRef        = useRef(1.0);
+  const cameraTargetZoomRef  = useRef(1.0);
+  const cameraDriftXRef      = useRef(0);
+  const cameraDriftYRef      = useRef(0);
+  const smoothedEnergyRef    = useRef(0.5);
+  const prevSectionLabelRef  = useRef<string | null>(null);
   const audioCtxRef  = useRef<AudioContext | null>(null);
   const analyserRef  = useRef<AnalyserNode | null>(null);
   const gainRef      = useRef<GainNode | null>(null);
@@ -344,19 +373,83 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       : 0.5;
     // ─────────────────────────────────────────────────────────────────────
 
-    // ── Spectrum Bars ─────────────────────────────────────────────────────
+    // ── Camera system ─────────────────────────────────────────────────────
+    // Smooth the energy value so the camera never jerks
+    smoothedEnergyRef.current += (currentEnergy - smoothedEnergyRef.current) * 0.03;
+    const smoothEnergy = smoothedEnergyRef.current;
+
+    // Section-change zoom events
+    if (activeSection?.label !== prevSectionLabelRef.current) {
+      prevSectionLabelRef.current = activeSection?.label ?? null;
+      if (activeSection?.label === 'drop')    cameraTargetZoomRef.current = 1.06;
+      else if (activeSection?.label === 'chorus') cameraTargetZoomRef.current = 1.03;
+      else if (activeSection?.label === 'breakdown') cameraTargetZoomRef.current = 0.965;
+      else if (activeSection?.label === 'intro' || activeSection?.label === 'outro') cameraTargetZoomRef.current = 0.985;
+      else cameraTargetZoomRef.current = 1.0;
+    }
+    // Breathing zoom layered on top of section target
+    const breathTarget = cameraTargetZoomRef.current * (1 + smoothEnergy * 0.018);
+    cameraZoomRef.current += (breathTarget - cameraZoomRef.current) * 0.022;
+
+    // Slow sinusoidal drift — amplitude scales with section intensity
+    const now = Date.now();
+    const driftAmp = 0.0045 * (0.3 + sectionIntensity * 0.7);
+    cameraDriftXRef.current = Math.sin(now * 0.00034) * driftAmp;
+    cameraDriftYRef.current = Math.cos(now * 0.00027) * driftAmp;
+
+    // Apply to wrapper div (GPU-accelerated CSS transform — no per-engine code changes needed)
+    if (cameraWrapperRef.current) {
+      const z = cameraZoomRef.current.toFixed(4);
+      const dx = (cameraDriftXRef.current * 100).toFixed(3);
+      const dy = (cameraDriftYRef.current * 100).toFixed(3);
+      cameraWrapperRef.current.style.transform = `translate(${dx}%, ${dy}%) scale(${z})`;
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    // ── Section-reactive colours ──────────────────────────────────────────
+    // Boosts saturation at drops, mutes at breakdowns — applied to all engines
+    const liveColors = colors.map(c => shiftColorIntensity(c, sectionIntensity)) as [string, string, string];
+    // ─────────────────────────────────────────────────────────────────────
+
+    // ── Spectrum Bars — mirror mode ───────────────────────────────────────
     if (eng === 'bars') {
       const bars = 80;
       const step = Math.floor(freq.length / bars);
       const barW = w / bars;
+      const midY = h / 2;
+
+      // Waveform underlay — subtle time-domain line behind bars
+      const tdLen = analyser.frequencyBinCount * 2;
+      const tdData = new Uint8Array(tdLen);
+      analyser.getByteTimeDomainData(tdData);
+      ctx.save();
+      ctx.strokeStyle = `rgba(255,255,255,0.12)`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let i = 0; i < tdData.length; i++) {
+        const x = (i / tdData.length) * w;
+        const y = ((tdData[i] / 128) - 1) * h * 0.14 + midY;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // Mirrored bars: grow outward from centre line
       for (let i = 0; i < bars; i++) {
         const v = (freq[i * step] / 255) * sens * energyMult;
-        const bh = v * h * 0.6 * (0.5 + sectionIntensity * 0.5);
-        const grad = ctx.createLinearGradient(0, h - bh, 0, h);
-        grad.addColorStop(0, colors[0]); grad.addColorStop(0.5, colors[1]); grad.addColorStop(1, colors[2]);
+        const bh = v * h * 0.44 * (0.4 + sectionIntensity * 0.6);
+        const grad = ctx.createLinearGradient(0, midY - bh, 0, midY + bh);
+        grad.addColorStop(0, liveColors[0]);
+        grad.addColorStop(0.5, liveColors[1]);
+        grad.addColorStop(1, liveColors[2]);
         ctx.fillStyle = grad;
-        ctx.fillRect(i * barW + 2, h - bh, barW - 4, bh);
+        ctx.fillRect(i * barW + 2, midY - bh, barW - 4, bh * 2);
       }
+
+      // Centre divider line
+      ctx.strokeStyle = `rgba(255,255,255,0.08)`;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(w, midY); ctx.stroke();
 
     // ── Radial Spectrum ───────────────────────────────────────────────────
     } else if (eng === 'radial') {
@@ -367,7 +460,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const bass = freq.slice(0, 8).reduce((a, b) => a + b, 0) / 8 / 255;
       const coreR = baseR + bass * baseR * sens;
       const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-      coreGrad.addColorStop(0, colors[0]); coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      coreGrad.addColorStop(0, liveColors[0]); coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = coreGrad;
       ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2); ctx.fill();
       for (let i = 0; i < bars; i++) {
@@ -377,7 +470,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const x1 = cx + Math.cos(angle) * baseR, y1 = cy + Math.sin(angle) * baseR;
         const x2 = cx + Math.cos(angle) * len,   y2 = cy + Math.sin(angle) * len;
         const grad = ctx.createLinearGradient(x1, y1, x2, y2);
-        grad.addColorStop(0, colors[1]); grad.addColorStop(1, colors[2]);
+        grad.addColorStop(0, liveColors[1]); grad.addColorStop(1, liveColors[2]);
         ctx.strokeStyle = grad; ctx.lineWidth = 3; ctx.lineCap = 'round';
         ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
       }
@@ -392,7 +485,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const tilt = 0.4 + Math.sin(cameraTRef.current * 0.6) * 0.2;
       const coreR = Math.min(w, h) * 0.07 * (1 + bass * sens * 0.6);
       const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 3);
-      coreGrad.addColorStop(0, colors[0]); coreGrad.addColorStop(0.4, colors[1]); coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      coreGrad.addColorStop(0, liveColors[0]); coreGrad.addColorStop(0.4, liveColors[1]); coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = coreGrad; ctx.beginPath(); ctx.arc(cx, cy, coreR * 3, 0, Math.PI * 2); ctx.fill();
       const ringCount = perf ? 3 : 6;
       for (let r = 0; r < ringCount; r++) {
@@ -401,7 +494,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const rot = cameraTRef.current * (0.3 + r * 0.1) + r;
         ctx.save();
         ctx.translate(cx, cy); ctx.rotate(rot); ctx.scale(1, Math.max(0.15, tilt - r * 0.03));
-        ctx.strokeStyle = colors[r % colors.length];
+        ctx.strokeStyle = liveColors[r % colors.length];
         ctx.globalAlpha = 0.55 + mids * 0.5;
         ctx.lineWidth = thickness;
         ctx.beginPath(); ctx.arc(0, 0, baseR, 0, Math.PI * 2); ctx.stroke();
@@ -416,7 +509,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const baseR = Math.min(w, h) * (0.12 + s.ring * 0.07);
         const x = cx + Math.cos(s.angle) * baseR;
         const y = cy + Math.sin(s.angle) * baseR * Math.max(0.15, tilt - s.ring * 0.03);
-        ctx.fillStyle = colors[2]; ctx.globalAlpha = s.life;
+        ctx.fillStyle = liveColors[2]; ctx.globalAlpha = s.life;
         ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
       }
       ctx.globalAlpha = 1;
@@ -451,14 +544,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const spawnBonus = bass > 0.5 ? 1 + bass * bResp * 1.5 : 1;
         const size = Math.max(0.4, depth * (1.8 + mids * 5 * sens) * spawnBonus);
         const alpha = Math.min(1, depth * 1.6) * (0.45 + highs * 0.55);
-        ctx.fillStyle = colors[Math.floor(s.hue * colors.length)] || colors[0];
+        ctx.fillStyle = liveColors[Math.floor(s.hue * colors.length)] || liveColors[0];
         ctx.globalAlpha = alpha;
         ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
       }
       ctx.globalAlpha = 1;
       // Shockwave ring on strong bass
       if (bass > 0.6 && bResp > 0.2) {
-        ctx.strokeStyle = colors[1]; ctx.lineWidth = 1 + bass;
+        ctx.strokeStyle = liveColors[1]; ctx.lineWidth = 1 + bass;
         ctx.globalAlpha = 0.25 * bass * bResp;
         ctx.beginPath(); ctx.arc(cx, cy, Math.min(w, h) * (0.12 + bass * 0.32), 0, Math.PI * 2); ctx.stroke();
         ctx.globalAlpha = 1;
@@ -474,8 +567,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const horizon = h * 0.4;
       // Sky gradient with atmospheric glow
       const sky = ctx.createLinearGradient(0, 0, 0, horizon);
-      sky.addColorStop(0, `rgba(${hexToRgb(colors[0])}, ${0.18 + highs * 0.4})`);
-      sky.addColorStop(0.6, `rgba(${hexToRgb(colors[1])}, ${0.04 + bass * 0.12})`);
+      sky.addColorStop(0, `rgba(${hexToRgb(liveColors[0])}, ${0.18 + highs * 0.4})`);
+      sky.addColorStop(0.6, `rgba(${hexToRgb(liveColors[1])}, ${0.04 + bass * 0.12})`);
       sky.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = sky; ctx.fillRect(0, 0, w, horizon);
       // Terrain mesh
@@ -485,7 +578,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const scale  = Math.pow(t, 1.3);
         const fogFactor = Math.max(0, 1 - t * 2.2);
         const alpha = (0.1 + scale * 0.8) * (1 - fogFactor * 0.75);
-        ctx.strokeStyle = `rgba(${hexToRgb(colors[r % colors.length])}, ${alpha})`;
+        ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % colors.length])}, ${alpha})`;
         ctx.lineWidth = 0.5 + scale * 1.8;
         ctx.beginPath();
         for (let c = 0; c <= cols; c++) {
@@ -504,7 +597,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       // Atmospheric fog near horizon
       const fog = ctx.createLinearGradient(0, horizon - 30, 0, horizon + 55);
       fog.addColorStop(0, 'rgba(3,3,12,0)');
-      fog.addColorStop(0.4, `rgba(${hexToRgb(colors[0])}, ${0.06 + bass * 0.08})`);
+      fog.addColorStop(0.4, `rgba(${hexToRgb(liveColors[0])}, ${0.06 + bass * 0.08})`);
       fog.addColorStop(1, 'rgba(3,3,12,0.35)');
       ctx.fillStyle = fog; ctx.fillRect(0, horizon - 30, w, 85);
 
@@ -527,7 +620,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.save();
         ctx.translate(cx, cy);
         ctx.rotate(roll * (1 - z));
-        const c = colors[i % colors.length];
+        const c = liveColors[i % colors.length];
         const bright = 0.3 + mids * 0.9 * sens; // mids drive brightness
         ctx.globalAlpha = Math.min(1, alpha * bright);
         ctx.shadowColor = c;
@@ -546,7 +639,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         if (highs > 0.4 && alpha > 0.25 && Math.random() < highs * 0.14) {
           const sa = Math.random() * Math.PI * 2;
           ctx.globalAlpha = Math.min(0.75, alpha * highs);
-          ctx.fillStyle   = colors[0];
+          ctx.fillStyle   = liveColors[0];
           ctx.shadowBlur  = 8;
           ctx.beginPath();
           ctx.arc(Math.cos(sa) * r, Math.sin(sa) * r, 2, 0, Math.PI * 2);
@@ -588,7 +681,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const sx = sp.x * w, sy = sp.y * h;
         const minDim = Math.min(w, h);
         const r = sp.size * minDim * (1 + be * sens * 1.8) * (1 + bass * 0.25);
-        const color = colors[i % colors.length];
+        const color = liveColors[i % colors.length];
         ctx.save();
         ctx.shadowColor = color;
         ctx.shadowBlur  = 20 + be * 55 * sens;
@@ -627,7 +720,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         if (seg % 2 === 1) ctx.scale(-1, 1);
         const bars = 28;
         const step = Math.floor(freq.length / bars);
-        const c = colors[seg % colors.length];
+        const c = liveColors[seg % colors.length];
         ctx.strokeStyle = c;
         ctx.shadowColor = c;
         ctx.shadowBlur  = 4 + highs * 14;
@@ -674,11 +767,11 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       // Sun
       const sunR = minDim * 0.055 * (1 + bass * sens * 0.55);
       ctx.save();
-      ctx.shadowColor = colors[0]; ctx.shadowBlur = 50 + bass * 80 * sens;
+      ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 50 + bass * 80 * sens;
       const sunG = ctx.createRadialGradient(cx, cy, 0, cx, cy, sunR * 3.5);
       sunG.addColorStop(0, '#ffffff');
-      sunG.addColorStop(0.15, colors[0]);
-      sunG.addColorStop(0.55, `rgba(${hexToRgb(colors[1])}, 0.35)`);
+      sunG.addColorStop(0.15, liveColors[0]);
+      sunG.addColorStop(0.55, `rgba(${hexToRgb(liveColors[1])}, 0.35)`);
       sunG.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = sunG;
       ctx.beginPath(); ctx.arc(cx, cy, sunR * 3.5, 0, Math.PI * 2); ctx.fill();
@@ -688,7 +781,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         for (let f = 0; f < 4; f++) {
           const a = (f / 4) * Math.PI * 2 + solarTRef.current;
           const fl = sunR * (1.8 + Math.random() * 2.5) * bass;
-          ctx.strokeStyle = `rgba(${hexToRgb(colors[0])}, ${0.25 * bass})`;
+          ctx.strokeStyle = `rgba(${hexToRgb(liveColors[0])}, ${0.25 * bass})`;
           ctx.lineWidth   = 0.8 + Math.random() * 1.5;
           ctx.globalAlpha = bass * 0.5;
           ctx.beginPath();
@@ -712,7 +805,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const px = cx + Math.cos(p.angle) * orbitR;
         const py = cy + Math.sin(p.angle) * orbitR;
         const pSize  = p.size * minDim * (1 + bv * sens * 0.9);
-        const pColor = colors[p.color % colors.length];
+        const pColor = liveColors[p.color % colors.length];
         ctx.save();
         ctx.shadowColor = pColor; ctx.shadowBlur = 8 + bv * 18;
         const pG = ctx.createRadialGradient(px, py, 0, px, py, pSize * 2.2);
@@ -738,11 +831,37 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.globalAlpha = 1; ctx.shadowBlur = 0;
     }
 
-    // Overlay label
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    // ── Post-processing ───────────────────────────────────────────────────
+    // Drop entry flash: brief white pulse at the very start of a drop/chorus
+    if (activeSection && sectionProgress < 0.04 &&
+        (activeSection.label === 'drop' || activeSection.label === 'chorus')) {
+      const flashAlpha = ((0.04 - sectionProgress) / 0.04) * 0.22;
+      ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+    // Breakdown vignette: subtle darkness at low-energy sections
+    if (activeSection && (activeSection.label === 'breakdown')) {
+      const vigAlpha = 0.18 * (1 - sectionProgress * 0.5);
+      ctx.fillStyle = `rgba(0,0,0,${vigAlpha})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    // Section label + energy dot (replaces static "Preview" text)
+    ctx.fillStyle = 'rgba(255,255,255,0.32)';
     ctx.font = '11px system-ui';
     ctx.textAlign = 'left';
-    ctx.fillText('Preview · Adaptive quality', 12, 20);
+    const sectionLabel = activeSection
+      ? `${activeSection.label.toUpperCase()} · ${Math.round(currentEnergy * 100)}%`
+      : 'Adaptive quality';
+    ctx.fillText(sectionLabel, 12, 20);
+    // Energy dot
+    const dotColor = sectionIntensity > 0.8 ? '#f59e0b'
+      : sectionIntensity > 0.5 ? '#8b5cf6'
+      : '#4b5563';
+    ctx.fillStyle = dotColor;
+    ctx.beginPath();
+    ctx.arc(ctx.measureText(sectionLabel).width + 20, 15, 4, 0, Math.PI * 2);
+    ctx.fill();
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1302,11 +1421,17 @@ if (dbExports.length > 0) {
                 </motion.div>
               )}
             </AnimatePresence>
-            {/* Canvas fills parent, aspect ratio maintained by CSS */}
-            <canvas
-              ref={canvasRef}
-              className="absolute inset-0 w-full h-full object-contain"
-            />
+            {/* Canvas — camera wrapper enables zoom/drift via CSS transform */}
+            <div
+              ref={cameraWrapperRef}
+              className="absolute inset-0 will-change-transform"
+              style={{ transformOrigin: '50% 50%' }}
+            >
+              <canvas
+                ref={canvasRef}
+                className="w-full h-full object-contain"
+              />
+            </div>
           </div>
  
           {/* Sign-in nudge — shown once to anonymous users after audio loads */}
