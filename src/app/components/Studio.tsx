@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Play, Pause, Upload, Download, ArrowLeft, RotateCw, FileVideo, Check,
-        Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff, Cloud } from 'lucide-react';
+        Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff, Cloud, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { AuthModal } from './AuthModal';
 import type { usePersistentProjects } from '../hooks/usePersistentProjects';
 import { useAuth } from '../hooks/useAuth';
 import { useSupabaseSync } from '../hooks/useSupabaseSync';
@@ -148,6 +149,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [clipDuration, setClipDuration] = useState<'full' | 15 | 30 | 60>('full');
   const [exports, setExports]         = useState<ExportJob[]>([]);
   const [uploadingToCloud, setUploadingToCloud] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [showSignInNudge, setShowSignInNudge] = useState(false);
 
   // ── Live-param refs (RAF closure safety) ──────────────────────────────────
   const engineRef          = useRef<EngineId>(engine);
@@ -183,6 +186,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
    const { user } = useAuth();
   const supabaseSync = useSupabaseSync(user?.id);
+  const { sessionExpired, clearExpiredFlag } = supabaseSync;
   
   // ── Export mode (platform-aware, computed once) ────────────────────────────
   const exportMode = useMemo(() => getExportMode(), []);
@@ -236,6 +240,15 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       .catch((err) => console.error('[studio] pending upload ERROR:', err));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, persistedId]);
+
+  // Show sign-in nudge ~2.5s after audio is ready for anonymous users
+  useEffect(() => {
+    if (status === 'ready' && !user) {
+      const t = setTimeout(() => setShowSignInNudge(true), 2500);
+      return () => clearTimeout(t);
+    }
+    if (user) setShowSignInNudge(false);
+  }, [status, user]);
 
   // Supabase autosave — debounced 1.5 s, runs in parallel with local persist
   useEffect(() => {
@@ -718,7 +731,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     }
   };
 
-  async function loadFile(file: File) {
+  async function loadFile(file: File, opts: { skipUpload?: boolean } = {}) {
     setStatus('decoding'); setError(null);
     try {
       if (!file.type.startsWith('audio/') && !/\.(mp3|wav|flac|ogg|m4a)$/i.test(file.name)) {
@@ -745,45 +758,33 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const created = persist.createProject(audioMeta, engine);
         setPersistedId(created.id);
  
-        // Fire-and-forget: upload to Supabase if signed in
-        // We use created.id directly (not the state variable) because state hasn't updated yet
-if (user?.id) {
-    setUploadingToCloud(true);
-        supabaseSync
-          .uploadAudio(created.id, file, audioMeta, engine)
-          .then((path) => {
-                        setUploadingToCloud(false);
-          })
-          .catch((err) => {
-            console.error('[studio] uploadAudio ERROR:', err);
-            setUploadingToCloud(false);
-          });
-  
-} else {
-  console.log('[studio] user not ready yet — storing pending upload for project:', created.id);
-  pendingUploadRef.current = { file, audioMeta, engineId: engine };
-}
- 
+        if (!opts.skipUpload) {
+          if (user?.id) {
+            setUploadingToCloud(true);
+            supabaseSync
+              .uploadAudio(created.id, file, audioMeta, engine)
+              .then(() => { setUploadingToCloud(false); })
+              .catch((err) => { console.error('[studio] uploadAudio ERROR:', err); setUploadingToCloud(false); });
+          } else {
+            console.log('[studio] user not ready yet — storing pending upload for project:', created.id);
+            pendingUploadRef.current = { file, audioMeta, engineId: engine };
+          }
+        }
       } else if (persist && persistedId) {
         persist.updateProject(persistedId, { audioMeta });
  
-        // Re-upload if user just signed in or track wasn't saved previously
-   if (user?.id) {
- setUploadingToCloud(true);
-        supabaseSync
-          .uploadAudio(persistedId, file, audioMeta, engine)
-          .then((path) => {
-                       setUploadingToCloud(false);
-          })
-          .catch((err) => {
-            console.error('[studio] uploadAudio ERROR:', err);
-            setUploadingToCloud(false);
-          });
-     
-} else {
-  console.log('[studio] user not ready yet — storing pending upload for project:', persistedId);
-  pendingUploadRef.current = { file, audioMeta, engineId: engine };
-}
+        if (!opts.skipUpload) {
+          if (user?.id) {
+            setUploadingToCloud(true);
+            supabaseSync
+              .uploadAudio(persistedId, file, audioMeta, engine)
+              .then(() => { setUploadingToCloud(false); })
+              .catch((err) => { console.error('[studio] uploadAudio ERROR:', err); setUploadingToCloud(false); });
+          } else {
+            console.log('[studio] user not ready yet — storing pending upload for project:', persistedId);
+            pendingUploadRef.current = { file, audioMeta, engineId: engine };
+          }
+        }
       }
 } catch (e: any) {
       setStatus('error'); setError(e.message || 'Failed to decode audio.');
@@ -813,9 +814,9 @@ if (user?.id) {
       if (!response.ok) throw new Error('Failed to fetch audio from storage');
       const blob = await response.blob();
  
-      // 4. Reconstruct a File object and call loadFile
+      // 4. Reconstruct a File object and call loadFile (skip re-upload — already in Storage)
       const file = new File([blob], track.filename, { type: track.mime_type || 'audio/mpeg' });
-      await loadFile(file);
+      await loadFile(file, { skipUpload: true });
  
       // 5. Restore export history from DB
       const dbExports = await fetchProjectExports(projId);
@@ -1137,6 +1138,29 @@ if (dbExports.length > 0) {
             />
           </div>
  
+          {/* Sign-in nudge — shown once to anonymous users after audio loads */}
+          {showSignInNudge && !user && (
+            <div className="shrink-0 flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs">
+              <span className="flex-1 text-gray-300">
+                Sign in to save this project and access it from any device.
+              </span>
+              <Button
+                size="sm"
+                className="h-7 text-xs bg-white text-gray-900 hover:bg-gray-100 shrink-0"
+                onClick={() => setAuthModalOpen(true)}
+              >
+                Sign in
+              </Button>
+              <button
+                className="text-gray-500 hover:text-gray-300 transition-colors shrink-0"
+                onClick={() => setShowSignInNudge(false)}
+                aria-label="Dismiss"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
           {/* Transport bar (fixed height) */}
           <div className="shrink-0 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5">
             <div className="flex items-center gap-3">
@@ -1171,6 +1195,21 @@ if (dbExports.length > 0) {
               <TabsTrigger value="export" className="text-xs">Export</TabsTrigger>
               <TabsTrigger value="exports" className="text-xs">History</TabsTrigger>
             </TabsList>
+
+            {/* Session expiry banner — shown when autosave silently failed */}
+            {sessionExpired && (
+              <div className="shrink-0 flex items-center gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-400/20 text-xs text-amber-300">
+                <AlertCircle className="size-3.5 shrink-0" />
+                <span className="flex-1">Session expired — sign in to resume saving.</span>
+                <Button
+                  size="sm"
+                  className="h-6 text-[11px] px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border-amber-400/30"
+                  onClick={() => setAuthModalOpen(true)}
+                >
+                  Sign in
+                </Button>
+              </div>
+            )}
  
             {/* Each tab content is scrollable */}
             <div className="flex-1 overflow-y-auto">
@@ -1353,9 +1392,10 @@ if (dbExports.length > 0) {
           </Tabs>
         </div>
         </div>
-      </div>
-    );
-  }
+      <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); clearExpiredFlag(); }} />
+    </div>
+  );
+}
 
       
 
