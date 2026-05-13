@@ -1144,16 +1144,16 @@ if (dbExports.length > 0) {
     <div className="h-screen flex flex-col bg-gradient-to-b from-black via-gray-950 to-black text-white overflow-hidden">
  
       {/* ── Top bar (fixed height) ──────────────────────────────── */}
-      <div className="shrink-0 border-b border-white/10 px-4 py-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="shrink-0 border-b border-white/10 px-3 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <Button variant="ghost" onClick={onBack} className="text-gray-200 hover:bg-white/10 shrink-0 h-8 px-2">
-            <ArrowLeft className="size-4 mr-1.5" /> Back
+            <ArrowLeft className="size-4 mr-1" /> <span className="hidden sm:inline">Back</span>
           </Button>
           <div className="min-w-0">
-            <div className="text-sm font-semibold truncate flex items-center gap-2">
-              {project?.fileName || 'New project'}
+            <div className="text-xs sm:text-sm font-semibold truncate flex items-center gap-1.5 sm:gap-2">
+              <span className="truncate">{project?.fileName || 'New project'}</span>
               {user && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                <span className="text-[10px] px-1.5 py-0.5 rounded shrink-0 hidden sm:inline"
                   style={{
                     background: uploadingToCloud ? 'rgba(251,191,36,0.12)' : 'rgba(16,185,129,0.12)',
                     color: uploadingToCloud ? 'rgb(251,191,36)' : 'rgb(16,185,129)',
@@ -1162,13 +1162,13 @@ if (dbExports.length > 0) {
                 </span>
               )}
             </div>
-            <div className="text-xs text-gray-400 truncate">
+            <div className="text-[11px] text-gray-400 truncate">
               {project ? `${fmt(project.duration)} · ${ENGINES.find((e) => e.id === engine)!.name}` : 'No track loaded'}
             </div>
           </div>
         </div>
         <Button variant="outline" onClick={onPickFile} className="border-white/20 text-white hover:bg-white/10 shrink-0 h-8 text-xs">
-          <Upload className="size-3.5 mr-1.5" /> Replace track
+          <Upload className="size-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Replace track</span>
         </Button>
       </div>
  
@@ -1177,7 +1177,8 @@ if (dbExports.length > 0) {
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
  
         {/* Left: canvas + transport — fixed height on mobile, flex-1 on desktop */}
-        <div className="flex flex-col shrink-0 lg:flex-1 p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden h-[260px] sm:h-[300px] lg:h-auto">
+        <div className="flex flex-col shrink-0 lg:flex-1 p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden
+                        h-[45vw] min-h-[200px] max-h-[340px] lg:h-auto lg:max-h-none">
  
           {/* Canvas — grows to fill, constrained by aspect ratio */}
           <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-black border border-white/10">
@@ -1266,14 +1267,14 @@ if (dbExports.length > 0) {
         </div>
  
         {/* Right: tabbed control panel (scrollable within itself) */}
-        <div className="flex-1 min-h-0 border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col overflow-hidden lg:w-[360px] lg:flex-none">
+        <div className="flex-1 min-h-0 border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col overflow-hidden lg:w-[340px] xl:w-[360px] lg:flex-none">
           <Tabs defaultValue="style" className="flex flex-col h-full">
             <TabsList className="grid grid-cols-5 w-full bg-white/5 rounded-none border-b border-white/10 shrink-0 h-10">
-              <TabsTrigger value="style" className="text-xs">Style</TabsTrigger>
-              <TabsTrigger value="motion" className="text-xs">Motion</TabsTrigger>
-              <TabsTrigger value="color" className="text-xs">Color</TabsTrigger>
-              <TabsTrigger value="export" className="text-xs">Export</TabsTrigger>
-              <TabsTrigger value="exports" className="text-xs">History</TabsTrigger>
+              <TabsTrigger value="style"   className="text-[10px] sm:text-xs">Style</TabsTrigger>
+              <TabsTrigger value="motion"  className="text-[10px] sm:text-xs">Motion</TabsTrigger>
+              <TabsTrigger value="color"   className="text-[10px] sm:text-xs">Color</TabsTrigger>
+              <TabsTrigger value="export"  className="text-[10px] sm:text-xs">Export</TabsTrigger>
+              <TabsTrigger value="exports" className="text-[10px] sm:text-xs">History</TabsTrigger>
             </TabsList>
 
             {/* Session expiry banner — shown when autosave silently failed */}
@@ -1394,22 +1395,22 @@ if (dbExports.length > 0) {
                 </div>
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Aspect ratio</div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
                     {ASPECTS.map((a) => (
                       <button key={a.id} onClick={() => setAspect(a.id)}
                         className={`p-2 rounded-lg border text-left ${aspect === a.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
                         <div className="font-semibold text-xs">{a.label}</div>
-                        <div className="text-[10px] opacity-70">{a.sub}</div>
+                        <div className="text-[10px] opacity-70 hidden sm:block">{a.sub}</div>
                       </button>
                     ))}
                   </div>
                 </div>
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Clip duration</div>
-                  <div className="flex gap-2 flex-wrap">
+                  <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
                     {(['full', 15, 30, 60] as const).map((d) => (
                       <button key={String(d)} onClick={() => setClipDuration(d)}
-                        className={`px-3 py-1.5 rounded-lg border text-xs ${clipDuration === d ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
+                        className={`py-1.5 rounded-lg border text-xs text-center ${clipDuration === d ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
                         {d === 'full' ? 'Full' : `${d}s`}
                       </button>
                     ))}
