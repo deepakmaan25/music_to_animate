@@ -12,6 +12,15 @@ import { useAuth } from '../hooks/useAuth';
 import { useSupabaseSync } from '../hooks/useSupabaseSync';
 import { fetchProjectTrack, fetchProjectExports } from '../lib/db';
 import { getAudioSignedUrl } from '../lib/storage';
+import {
+  analyzeTrack,
+  getSectionAtTime,
+  getSectionProgress,
+  sampleEnergyCurve,
+  type TrackAnalysis,
+  type TrackSection,
+} from '../lib/audioAnalysis';
+import { recommendEngines, type EngineRecommendation } from '../lib/engineRecommendations';
 
 // ─── Platform helpers ────────────────────────────────────────────────────────
 function isIOSDevice(): boolean {
@@ -151,6 +160,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [uploadingToCloud, setUploadingToCloud] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [showSignInNudge, setShowSignInNudge] = useState(false);
+  const [trackAnalysis, setTrackAnalysis] = useState<TrackAnalysis | null>(null);
+  const [recommendations, setRecommendations] = useState<EngineRecommendation[]>([]);
 
   // ── Live-param refs (RAF closure safety) ──────────────────────────────────
   const engineRef          = useRef<EngineId>(engine);
@@ -182,6 +193,11 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const solarTRef  = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const pendingUploadRef = useRef<{ file: File; audioMeta: { name: string; duration: number; sampleRate?: number }; engineId: string } | null>(null);  // ADD THIS
+
+  // Phase 9 refs — written once after decode, read every RAF frame
+  const sectionsRef       = useRef<TrackSection[]>([]);
+  const energyCurveRef    = useRef<Float32Array>(new Float32Array(0));
+  const energyCurveResRef = useRef(0.1);
 
 
    const { user } = useAuth();
@@ -307,14 +323,32 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     const freq = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(freq);
 
+    // ── Phase 9: section + energy context ─────────────────────────────────
+    const playbackSec = audioCtxRef.current
+      ? Math.max(0, audioCtxRef.current.currentTime - startedAtRef.current + offsetRef.current)
+      : 0;
+    const activeSection = getSectionAtTime(sectionsRef.current, playbackSec);
+    const sectionProgress = activeSection ? getSectionProgress(activeSection, playbackSec) : 0;
+    const currentEnergy = sampleEnergyCurve(energyCurveRef.current, playbackSec, energyCurveResRef.current);
+    // energyMult: smoothly scales between 0.6 (low energy) and 1.4 (high energy)
+    const energyMult = 0.6 + currentEnergy * 0.8;
+    // sectionIntensity: 0=breakdown/intro, 0.5=verse, 1=drop/chorus
+    const sectionIntensity = activeSection
+      ? (['drop', 'chorus'].includes(activeSection.label) ? 1.0
+        : ['verse'].includes(activeSection.label) ? 0.55
+        : ['intro', 'outro'].includes(activeSection.label) ? 0.35
+        : 0.25) // breakdown
+      : 0.5;
+    // ─────────────────────────────────────────────────────────────────────
+
     // ── Spectrum Bars ─────────────────────────────────────────────────────
     if (eng === 'bars') {
       const bars = 80;
       const step = Math.floor(freq.length / bars);
       const barW = w / bars;
       for (let i = 0; i < bars; i++) {
-        const v = (freq[i * step] / 255) * sens;
-        const bh = v * h * 0.6;
+        const v = (freq[i * step] / 255) * sens * energyMult;
+        const bh = v * h * 0.6 * (0.5 + sectionIntensity * 0.5);
         const grad = ctx.createLinearGradient(0, h - bh, 0, h);
         grad.addColorStop(0, colors[0]); grad.addColorStop(0.5, colors[1]); grad.addColorStop(1, colors[2]);
         ctx.fillStyle = grad;
@@ -334,8 +368,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = coreGrad;
       ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2); ctx.fill();
       for (let i = 0; i < bars; i++) {
-        const v = (freq[i * step] / 255) * sens;
-        const len = baseR + v * Math.min(w, h) * 0.35;
+        const v = (freq[i * step] / 255) * sens * energyMult;
+        const len = baseR + v * Math.min(w, h) * 0.35 * (0.4 + sectionIntensity * 0.6);
         const angle = (i / bars) * Math.PI * 2;
         const x1 = cx + Math.cos(angle) * baseR, y1 = cy + Math.sin(angle) * baseR;
         const x2 = cx + Math.cos(angle) * len,   y2 = cy + Math.sin(angle) * len;
@@ -351,7 +385,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillRect(0, 0, w, h);
       const cx = w / 2, cy = h / 2;
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      cameraTRef.current += 0.004 + bass * 0.01 * sens;
+      cameraTRef.current += (0.004 + bass * 0.01 * sens) * energyMult;
       const tilt = 0.4 + Math.sin(cameraTRef.current * 0.6) * 0.2;
       const coreR = Math.min(w, h) * 0.07 * (1 + bass * sens * 0.6);
       const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 3);
@@ -359,8 +393,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = coreGrad; ctx.beginPath(); ctx.arc(cx, cy, coreR * 3, 0, Math.PI * 2); ctx.fill();
       const ringCount = perf ? 3 : 6;
       for (let r = 0; r < ringCount; r++) {
-        const baseR = Math.min(w, h) * (0.12 + r * 0.07) * (1 + bass * sens * 0.15);
-        const thickness = 1.5 + mids * 6 * sens + r * 0.4;
+        const baseR = Math.min(w, h) * (0.12 + r * 0.07) * (1 + bass * sens * 0.15) * (0.7 + sectionIntensity * 0.3);
+        const thickness = (1.5 + mids * 6 * sens + r * 0.4) * energyMult;
         const rot = cameraTRef.current * (0.3 + r * 0.1) + r;
         ctx.save();
         ctx.translate(cx, cy); ctx.rotate(rot); ctx.scale(1, Math.max(0.15, tilt - r * 0.03));
@@ -391,14 +425,17 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = `rgba(2,2,8,${trail})`;
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      const targetCount = perf ? 600 : 1800;
+      // Section-aware particle count: fewer in breakdown, more in drop/chorus
+      const densityScale = 0.4 + sectionIntensity * 0.6;
+      const targetCount = Math.floor((perf ? 600 : 1800) * densityScale);
       while (starsRef.current.length < targetCount) {
         starsRef.current.push({ x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2, z: Math.random(), hue: Math.random() });
       }
+      starsRef.current.length = Math.min(starsRef.current.length, targetCount + 200);
       // Slow immersive base + sharp beat burst
       const baseSpd = 0.0008 + bSpeed * 0.004;
       const beatBurst = bass > 0.45 ? bass * bResp * 0.055 * sens : 0;
-      const speed = baseSpd + beatBurst;
+      const speed = (baseSpd + beatBurst) * energyMult;
       const cx = w / 2, cy = h / 2;
       const focal = Math.min(w, h) * 0.6;
       for (const s of starsRef.current) {
@@ -473,11 +510,11 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = 'rgba(0,0,6,0.32)';
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      tunnelTRef.current += 0.01 + bass * 0.07 * sens;
+      tunnelTRef.current += (0.01 + bass * 0.07 * sens) * energyMult;
       const cx = w / 2, cy = h / 2;
       const segments = perf ? 12 : 24;
       const roll = Math.sin(tunnelTRef.current * 0.25) * 0.06;
-      const scalePulse = 1 + bass * 0.35 * sens; // bass drives scale
+      const scalePulse = 1 + bass * 0.35 * sens * sectionIntensity;
       for (let i = segments - 1; i >= 0; i--) {
         const z      = ((i + tunnelTRef.current) % segments) / segments;
         const scale  = (1 - z) * scalePulse;
@@ -574,9 +611,9 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
       const energy = bass * 0.5 + mids * 0.35 + highs * 0.15;
-      solarTRef.current += 0.008 + energy * 0.04 * sens;
+      solarTRef.current += (0.008 + energy * 0.04 * sens) * energyMult;
       const cx = w / 2, cy = h / 2;
-      const zoom = 1 + bass * sens * 0.4;
+      const zoom = 1 + bass * sens * 0.4 * sectionIntensity;
       const segs = 8;
       ctx.save();
       ctx.translate(cx, cy);
@@ -619,7 +656,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = 'rgba(1,1,8,0.28)';
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      solarTRef.current += 0.006 + bass * 0.012 * sens;
+      solarTRef.current += (0.006 + bass * 0.012 * sens) * energyMult;
       const cx = w / 2, cy = h / 2;
       const minDim = Math.min(w, h);
       if (planetsRef.current.length < 5) {
@@ -752,6 +789,22 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       analyser.connect(gain).connect(ctx.destination);
       const newProj: Project = { id: `prj_${Date.now()}`, fileName: file.name, duration: audioBuffer.duration, audioBuffer, engine: initialEngine };
       setProject(newProj); setStatus('ready');
+
+      // ── Phase 9: offline analysis (non-blocking, runs after render) ────────
+      setTimeout(() => {
+        try {
+          const analysis = analyzeTrack(audioBuffer);
+          sectionsRef.current       = analysis.sections;
+          energyCurveRef.current    = analysis.energyCurve;
+          energyCurveResRef.current = analysis.energyCurveResolution;
+          setTrackAnalysis(analysis);
+          setRecommendations(recommendEngines(analysis.mood, analysis.bpm, 3));
+        } catch (err) {
+          console.warn('[studio] offline analysis failed (non-fatal):', err);
+        }
+      }, 0);
+      // ──────────────────────────────────────────────────────────────────────
+
        const audioMeta = { name: file.name, duration: audioBuffer.duration, sampleRate: audioBuffer.sampleRate };
  
       if (persist && !persistedId) {
@@ -1216,6 +1269,41 @@ if (dbExports.length > 0) {
  
               {/* ── Style ───────────────────────────────────────── */}
               <TabsContent value="style" className="p-4 space-y-4 mt-0">
+
+                {/* ── Recommendations (shown after analysis completes) ── */}
+                {recommendations.length > 0 && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-purple-300 mb-2 flex items-center gap-1.5">
+                      <span>✦</span> Recommended for this track
+                      {trackAnalysis && (
+                        <span className="ml-auto text-gray-500 normal-case tracking-normal">
+                          {trackAnalysis.bpm} BPM · {trackAnalysis.mood}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                      {recommendations.map((rec) => {
+                        const engineName = ENGINES.find(e => e.id === rec.engineId)?.name ?? rec.engineId;
+                        return (
+                          <button
+                            key={rec.engineId}
+                            title={rec.reason}
+                            onClick={() => setEngine(rec.engineId)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs transition-all ${
+                              engine === rec.engineId
+                                ? 'bg-purple-500/30 border-purple-400/60 text-purple-100'
+                                : 'bg-purple-500/10 border-purple-400/20 text-purple-300 hover:bg-purple-500/20'
+                            }`}
+                          >
+                            {engineName}
+                            <span className="text-[9px] opacity-60">★</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {(['2D', '3D'] as const).map((group) => (
                   <div key={group} className="space-y-1.5">
                     <div className="text-[10px] uppercase tracking-wider text-gray-400 flex items-center gap-2 px-1">
