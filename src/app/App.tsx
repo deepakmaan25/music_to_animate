@@ -5,6 +5,7 @@ import {
   Heart, Music2, Clock, ArrowRight, Sun, Moon, Trash2, LogOut, Cloud,
   ChevronLeft, ChevronRight, FolderOpen, ExternalLink, FileVideo, Loader2
 } from 'lucide-react';
+import { Analytics } from '@vercel/analytics/react';
 import { Button } from './components/ui/button';
 import { Studio } from './components/Studio';
 import { AuthModal } from './components/AuthModal';
@@ -36,7 +37,12 @@ const PROJECTS_PER_PAGE = 6;
 
 export default function App() {
   if (typeof window !== 'undefined' && window.location.pathname === '/auth/callback') return <AuthCallback />;
-  return <LandingApp />;
+  return (
+    <>
+      <LandingApp />
+      <Analytics />
+    </>
+  );
 }
 
 function LandingApp() {
