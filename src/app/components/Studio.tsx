@@ -89,6 +89,38 @@ const ENGINES: { id: EngineId; name: string; description: string; group: '2D' | 
   { id: 'solar',       name: 'Solar System',          description: 'Central sun with orbiting bodies; flares on bass.',    group: '3D' },
 ];
 
+// ─── Engine style variants ────────────────────────────────────────────────────
+const VARIANTS: Partial<Record<EngineId, { id: string; label: string; description: string }[]>> = {
+  bars: [
+    { id: 'mirror',  label: 'Mirror',   description: 'Bars grow from centre outward (default)' },
+    { id: 'classic', label: 'Classic',  description: 'Bars rise from the bottom' },
+    { id: 'wave',    label: 'Wave',     description: 'Smooth filled frequency curve' },
+  ],
+  radial: [
+    { id: 'spokes',  label: 'Spokes',   description: 'Bars radiate outward (default)' },
+    { id: 'ring',    label: 'Ring',     description: 'Thick pulsing ring around the core' },
+    { id: 'burst',   label: 'Burst',    description: 'Petal explosion on every beat' },
+  ],
+  depth: [
+    { id: 'starfield', label: 'Starfield', description: 'Flying through a star tunnel (default)' },
+    { id: 'nebula',    label: 'Nebula',    description: 'Slow-drifting glowing cloud of particles' },
+    { id: 'vortex',    label: 'Vortex',    description: 'Particles spiral inward on every beat' },
+  ],
+  tunnel: [
+    { id: 'hex',    label: 'Hex',    description: 'Hexagonal rings (default)' },
+    { id: 'circle', label: 'Circle', description: 'Perfect circle rings' },
+    { id: 'square', label: 'Square', description: 'Square rings with sharp corners' },
+  ],
+  terrain: [
+    { id: 'wireframe', label: 'Wireframe', description: 'Mesh grid lines (default)' },
+    { id: 'solid',     label: 'Solid',     description: 'Filled terrain with coloured horizon' },
+  ],
+  neon_spheres: [
+    { id: 'float',  label: 'Float',  description: 'Freeform drifting spheres (default)' },
+    { id: 'orbit',  label: 'Orbit',  description: 'Spheres orbit a central glow point' },
+  ],
+};
+
 const PALETTES: { name: string; colors: [string, string, string] }[] = [
   { name: 'Sunset', colors: ['#8b5cf6', '#ec4899', '#f59e0b'] },
   { name: 'Ocean',  colors: ['#06b6d4', '#3b82f6', '#8b5cf6'] },
@@ -164,6 +196,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [persistedId, setPersistedId] = useState<string | null>(projectId ?? null);
 
   const [engine, setEngine]                   = useState<EngineId>((stored?.engineId as EngineId) ?? initialEngine);
+  const [variant, setVariant]                 = useState<string>(''); // '' = first/default variant
   const [palette, setPalette]                 = useState(stored?.style.palette ?? 0);
   const [beatSensitivity, setBeatSensitivity] = useState(stored?.motion.beatSensitivity ?? 0.7);
   const [particleDensity, setParticleDensity] = useState(stored?.motion.particleDensity ?? 0.6);
@@ -194,6 +227,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
   // ── Live-param refs (RAF closure safety) ──────────────────────────────────
   const engineRef          = useRef<EngineId>(engine);
+  const variantRef         = useRef(variant);
   const paletteRef         = useRef(palette);
   const beatSensRef        = useRef(beatSensitivity);
   const particleDensRef    = useRef(particleDensity);
@@ -259,6 +293,9 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
   // ── Sync state → refs (MUST be defined before drawFrame effect) ───────────
   useEffect(() => { engineRef.current       = engine;          }, [engine]);
+  useEffect(() => { variantRef.current      = variant;         }, [variant]);
+  // Reset variant when switching engine so default always applies
+  useEffect(() => { setVariant('');                            }, [engine]);
   useEffect(() => { paletteRef.current      = palette;         }, [palette]);
   useEffect(() => { beatSensRef.current     = beatSensitivity; }, [beatSensitivity]);
   useEffect(() => { particleDensRef.current = particleDensity; }, [particleDensity]);
@@ -369,6 +406,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     if (!ctx) return;
 
     const eng     = engineRef.current;
+    const vrnt    = variantRef.current;  // active style variant
     const pal     = paletteRef.current;
     const sens    = 0.5 + beatSensRef.current * 1.5;
     const perf    = perfModeRef.current;
@@ -479,68 +517,177 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     fpsFramesRef.current++;
     // ─────────────────────────────────────────────────────────────────────
 
-    // ── Spectrum Bars — mirror mode ───────────────────────────────────────
+    // ── Spectrum Bars ─────────────────────────────────────────────────────
     if (eng === 'bars') {
-      const bars = 80;
-      const step = Math.floor(freq.length / bars);
-      const barW = w / bars;
-      const midY = h / 2;
+      const numBars = 80;
+      const step = Math.floor(freq.length / numBars);
+      const barW = w / numBars;
 
-      // Waveform underlay — colour-matched to palette
-      const tdLen = analyser.frequencyBinCount * 2;
-      const tdData = new Uint8Array(tdLen);
+      // Waveform underlay — all variants share this
+      const tdData = new Uint8Array(analyser.frequencyBinCount * 2);
       analyser.getByteTimeDomainData(tdData);
       ctx.save();
-      ctx.strokeStyle = `rgba(${hexToRgb(liveColors[1])}, 0.22)`;
+      ctx.strokeStyle = `rgba(${hexToRgb(liveColors[1])}, 0.18)`;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       for (let i = 0; i < tdData.length; i++) {
         const x = (i / tdData.length) * w;
-        const y = ((tdData[i] / 128) - 1) * h * 0.14 + midY;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        const y = ((tdData[i] / 128) - 1) * h * 0.13 + h / 2;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       }
       ctx.stroke();
       ctx.restore();
 
-      // Mirrored bars: grow outward from centre line
-      for (let i = 0; i < bars; i++) {
-        const v = (freq[i * step] / 255) * sens * energyMult;
-        const bh = v * h * 0.36 * (0.4 + sectionIntensity * 0.6);
-        const grad = ctx.createLinearGradient(0, midY - bh, 0, midY + bh);
+      if (vrnt === 'classic') {
+        // ── Classic: bars rise from bottom ─────────────────────────────
+        for (let i = 0; i < numBars; i++) {
+          const v  = (freq[i * step] / 255) * sens * energyMult;
+          const bh = v * h * 0.72 * (0.4 + sectionIntensity * 0.6);
+          const grad = ctx.createLinearGradient(0, h - bh, 0, h);
+          grad.addColorStop(0, liveColors[0]);
+          grad.addColorStop(0.5, liveColors[1]);
+          grad.addColorStop(1, liveColors[2]);
+          ctx.fillStyle = grad;
+          ctx.fillRect(i * barW + 1, h - bh, barW - 2, bh);
+        }
+      } else if (vrnt === 'wave') {
+        // ── Wave: smooth filled frequency curve ─────────────────────────
+        const pts: [number, number][] = [];
+        for (let i = 0; i < numBars; i++) {
+          const v = (freq[i * step] / 255) * sens * energyMult;
+          const bh = v * h * 0.72 * (0.4 + sectionIntensity * 0.6);
+          pts.push([i * barW + barW / 2, h - bh]);
+        }
+        // Top stroke
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
         grad.addColorStop(0, liveColors[0]);
         grad.addColorStop(0.5, liveColors[1]);
-        grad.addColorStop(1, liveColors[2]);
+        grad.addColorStop(1, `rgba(${hexToRgb(liveColors[2])}, 0.2)`);
+        ctx.strokeStyle = liveColors[0];
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = liveColors[0];
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length - 1; i++) {
+          const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+          const my = (pts[i][1] + pts[i + 1][1]) / 2;
+          ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+        }
+        ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        // Fill under curve
         ctx.fillStyle = grad;
-        ctx.fillRect(i * barW + 2, midY - bh, barW - 4, bh * 2);
+        ctx.globalAlpha = 0.35;
+        ctx.beginPath();
+        ctx.moveTo(0, h);
+        ctx.lineTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length - 1; i++) {
+          const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+          const my = (pts[i][1] + pts[i + 1][1]) / 2;
+          ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+        }
+        ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+        ctx.lineTo(w, h);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      } else {
+        // ── Mirror (default): bars grow from centre ──────────────────────
+        const midY = h / 2;
+        for (let i = 0; i < numBars; i++) {
+          const v = (freq[i * step] / 255) * sens * energyMult;
+          const bh = v * h * 0.36 * (0.4 + sectionIntensity * 0.6);
+          const grad = ctx.createLinearGradient(0, midY - bh, 0, midY + bh);
+          grad.addColorStop(0, liveColors[0]);
+          grad.addColorStop(0.5, liveColors[1]);
+          grad.addColorStop(1, liveColors[2]);
+          ctx.fillStyle = grad;
+          ctx.fillRect(i * barW + 2, midY - bh, barW - 4, bh * 2);
+        }
+        ctx.strokeStyle = `rgba(255,255,255,0.06)`;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(w, midY); ctx.stroke();
       }
-
-      // Centre divider line
-      ctx.strokeStyle = `rgba(255,255,255,0.08)`;
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(w, midY); ctx.stroke();
 
     // ── Radial Spectrum ───────────────────────────────────────────────────
     } else if (eng === 'radial') {
       const cx = w / 2, cy = h / 2;
-      const baseR = Math.min(w, h) * 0.15;
+      const minDim = Math.min(w, h);
+      const baseR = minDim * 0.15;
       const bars = 96;
       const step = Math.floor(freq.length / bars);
-      const bass = freq.slice(0, 8).reduce((a, b) => a + b, 0) / 8 / 255;
-      const coreR = baseR + bass * baseR * sens;
-      const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-      coreGrad.addColorStop(0, liveColors[0]); coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      const bass = avg(freq, 0, 8);
+      const coreR = baseR * (1 + bass * sens * 0.6);
+      // Shared core glow
+      const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 1.5);
+      coreGrad.addColorStop(0, liveColors[0]);
+      coreGrad.addColorStop(0.5, `rgba(${hexToRgb(liveColors[1])}, 0.4)`);
+      coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = coreGrad;
-      ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2); ctx.fill();
-      for (let i = 0; i < bars; i++) {
-        const v = (freq[i * step] / 255) * sens * energyMult;
-        const len = baseR + v * Math.min(w, h) * 0.35 * (0.4 + sectionIntensity * 0.6);
-        const angle = (i / bars) * Math.PI * 2;
-        const x1 = cx + Math.cos(angle) * baseR, y1 = cy + Math.sin(angle) * baseR;
-        const x2 = cx + Math.cos(angle) * len,   y2 = cy + Math.sin(angle) * len;
-        const grad = ctx.createLinearGradient(x1, y1, x2, y2);
-        grad.addColorStop(0, liveColors[1]); grad.addColorStop(1, liveColors[2]);
-        ctx.strokeStyle = grad; ctx.lineWidth = 3; ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, coreR * 1.5, 0, Math.PI * 2); ctx.fill();
+
+      if (vrnt === 'ring') {
+        // ── Ring: thick pulsing ring ────────────────────────────────────
+        const ringBars = 256;
+        const rStep = Math.floor(freq.length / ringBars);
+        for (let i = 0; i < ringBars; i++) {
+          const v = (freq[i * rStep] / 255) * sens * energyMult;
+          const r1 = coreR * 1.1;
+          const r2 = r1 + v * minDim * 0.32 * (0.5 + sectionIntensity * 0.5);
+          const a1 = (i / ringBars) * Math.PI * 2;
+          const a2 = ((i + 1) / ringBars) * Math.PI * 2;
+          const color = liveColors[i % liveColors.length];
+          ctx.fillStyle = color;
+          ctx.globalAlpha = 0.7 + v * 0.3;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r2, a1, a2);
+          ctx.arc(cx, cy, r1, a2, a1, true);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      } else if (vrnt === 'burst') {
+        // ── Burst: petal explosion ─────────────────────────────────────
+        const numPetals = 12 + Math.round(sectionIntensity * 6);
+        for (let i = 0; i < numPetals; i++) {
+          const bandVal = avg(freq, Math.floor(i * freq.length / numPetals), Math.floor((i + 1) * freq.length / numPetals));
+          const petalLen = (baseR * 0.5 + bandVal * minDim * 0.38 * sens) * energyMult * (0.6 + sectionIntensity * 0.4);
+          const angle = (i / numPetals) * Math.PI * 2;
+          const tipX = cx + Math.cos(angle) * petalLen;
+          const tipY = cy + Math.sin(angle) * petalLen;
+          const cp1X = cx + Math.cos(angle - 0.3) * petalLen * 0.6;
+          const cp1Y = cy + Math.sin(angle - 0.3) * petalLen * 0.6;
+          const cp2X = cx + Math.cos(angle + 0.3) * petalLen * 0.6;
+          const cp2Y = cy + Math.sin(angle + 0.3) * petalLen * 0.6;
+          const color = liveColors[i % liveColors.length];
+          ctx.fillStyle = color;
+          ctx.globalAlpha = 0.55 + bandVal * 0.45;
+          ctx.shadowColor = color; ctx.shadowBlur = 8 + bandVal * 20;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.bezierCurveTo(cp1X, cp1Y, cp2X, cp2Y, tipX, tipY);
+          ctx.closePath(); ctx.fill();
+        }
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+      } else {
+        // ── Spokes (default) ───────────────────────────────────────────
+        for (let i = 0; i < bars; i++) {
+          const v = (freq[i * step] / 255) * sens * energyMult;
+          const len = baseR + v * minDim * 0.35 * (0.4 + sectionIntensity * 0.6);
+          const angle = (i / bars) * Math.PI * 2;
+          const x1 = cx + Math.cos(angle) * baseR, y1 = cy + Math.sin(angle) * baseR;
+          const x2 = cx + Math.cos(angle) * len,   y2 = cy + Math.sin(angle) * len;
+          const grad = ctx.createLinearGradient(x1, y1, x2, y2);
+          grad.addColorStop(0, liveColors[0]);
+          grad.addColorStop(0.5, liveColors[1]);
+          grad.addColorStop(1, liveColors[2]);
+          ctx.strokeStyle = grad; ctx.lineWidth = 1.5 + v * 2; ctx.lineCap = 'round';
+          ctx.shadowColor = liveColors[1]; ctx.shadowBlur = 4 + v * 12;
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
       }
 
     // ── Orbital Rings ─────────────────────────────────────────────────────
@@ -583,123 +730,149 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.globalAlpha = 1;
       sparksRef.current = sparksRef.current.filter((s) => s.life > 0.08);
 
-    // ── Depth Field Particles — cinematic starfield ───────────────────────
+    // ── Depth Field Particles ────────────────────────────────────────────
     } else if (eng === 'depth') {
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-
-      // Beat onset: rising edge only
       const bassOnset = Math.max(0, bass - prevBassRef.current);
       prevBassRef.current = bass;
       const isBeat = bassOnset > 0.048;
-
-      // Smooth burst persists ~8 frames so each beat is visibly felt
       if (isBeat) smoothedBurstRef.current = Math.min(1, smoothedBurstRef.current + bassOnset * 2.2);
-      smoothedBurstRef.current *= 0.82; // decay per frame
+      smoothedBurstRef.current *= 0.82;
       const burst = smoothedBurstRef.current;
 
-      // Trail fade: controlled by beat responsiveness
-      // Low bResp → longer dreamy trails; high bResp → snappy short trails
       const trail = 0.08 + (1 - bResp) * 0.16;
       ctx.fillStyle = `rgba(2,2,8,${trail})`;
       ctx.fillRect(0, 0, w, h);
 
-      // Particle count: section + density slider
       const densityScale = 0.5 + sectionIntensity * 0.5;
       const targetCount = Math.floor((perf ? 350 : 900) * densityScale * (0.35 + particleDensRef.current * 0.65));
       while (starsRef.current.length < targetCount) {
-        starsRef.current.push({
-          x: (Math.random() - 0.5) * 2,
-          y: (Math.random() - 0.5) * 2,
-          z: 0.15 + Math.random() * 0.85,
-          hue: Math.random(),
-        });
+        starsRef.current.push({ x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2, z: 0.15 + Math.random() * 0.85, hue: Math.random() });
       }
       starsRef.current.length = Math.min(starsRef.current.length, targetCount + 60);
 
-      // Speed: gentle base drift + burst spike on beat
-      // bSpeed controls cruise; bResp controls how dramatic the beat surge is
-      const baseSpd = 0.00025 + bSpeed * 0.0012;
-      const beatSpike = burst * bResp * 0.10 * sens;
-      const speed = (baseSpd + beatSpike) * energyMult;
-
       const cx = w / 2, cy = h / 2;
-      const focal = Math.min(w, h) * 0.68;
 
-      for (const s of starsRef.current) {
-        const prevZ = s.z;
-        s.z -= speed;
-
-        if (s.z <= 0.003) {
-          // Respawn at the far end of the tunnel
-          s.x = (Math.random() - 0.5) * 2;
-          s.y = (Math.random() - 0.5) * 2;
-          s.z = 0.88 + Math.random() * 0.12;
-          s.hue = Math.random();
-          continue;
+      if (vrnt === 'nebula') {
+        // ── Nebula: slow drifting colour cloud ──────────────────────────
+        ctx.clearRect(0, 0, 0, 0); // no-op, trail already applied above
+        for (const s of starsRef.current) {
+          // Drift slowly — no focal point, just floating
+          s.x += Math.sin(s.z * 12 + mids * 2) * 0.0004 * energyMult;
+          s.y += Math.cos(s.z * 9  + bass * 2) * 0.0004 * energyMult;
+          // Wrap edges
+          if (s.x < -1) s.x += 2; if (s.x > 1) s.x -= 2;
+          if (s.y < -1) s.y += 2; if (s.y > 1) s.y -= 2;
+          const sx = (s.x * 0.5 + 0.5) * w;
+          const sy = (s.y * 0.5 + 0.5) * h;
+          // Size pulses with its own hue band
+          const bandIdx = Math.floor(s.hue * freq.length * 0.4);
+          const bandVal = (freq[Math.min(bandIdx, freq.length - 1)] / 255) * sens;
+          const size = (2 + bandVal * 18 * (0.5 + sectionIntensity * 0.5)) * (0.4 + burst * 0.6);
+          const color = liveColors[Math.floor(s.hue * liveColors.length)];
+          ctx.globalAlpha = 0.25 + bandVal * 0.55;
+          ctx.shadowColor = color; ctx.shadowBlur = size * 2.5;
+          ctx.fillStyle = color;
+          ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
         }
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 
-        const sx = cx + (s.x / s.z) * focal;
-        const sy = cy + (s.y / s.z) * focal;
-        if (sx < -40 || sx > w + 40 || sy < -40 || sy > h + 40) continue;
-
-        // Quadratic proximity makes depth physically clear
-        const proximity = 1 - s.z; // 0=far, 1=close
-        const proxSq = proximity * proximity;
-
-        // Size: tiny stars far away, large glowing ones close
-        const size = Math.max(0.25, proxSq * (4.5 + mids * 8 * sens));
-
-        // Alpha: close stars bright, far ones dim
-        const alpha = Math.min(1, proximity * 1.8) * (0.35 + highs * 0.65);
-        const color = liveColors[Math.floor(s.hue * liveColors.length)] || liveColors[0];
-
-        ctx.globalAlpha = alpha;
-
-        // Warp trail: draw line from previous position on beat burst
-        if (burst > 0.05 && prevZ > 0) {
-          const prevSx = cx + (s.x / prevZ) * focal;
-          const prevSy = cy + (s.y / prevZ) * focal;
-          const trailLen = Math.hypot(sx - prevSx, sy - prevSy);
-          if (trailLen > 1.2 && trailLen < 100) {
-            ctx.strokeStyle = color;
-            ctx.lineWidth = Math.max(0.4, size * 0.45);
-            ctx.lineCap = 'round';
-            ctx.globalAlpha = alpha * Math.min(1, burst * 1.5);
-            ctx.beginPath();
-            ctx.moveTo(prevSx, prevSy);
-            ctx.lineTo(sx, sy);
-            ctx.stroke();
-            ctx.globalAlpha = alpha;
+      } else if (vrnt === 'vortex') {
+        // ── Vortex: particles spiral into centre on beats ───────────────
+        const baseSpd = 0.00025 + bSpeed * 0.0012;
+        const beatSpike = burst * bResp * 0.10 * sens;
+        cameraTRef.current += (0.008 + bass * 0.02 * sens) * energyMult; // rotation clock
+        for (const s of starsRef.current) {
+          const prevX = s.x, prevY = s.y;
+          // Spiral inward: shrink radius + rotate
+          const r = Math.hypot(s.x, s.y);
+          const theta = Math.atan2(s.y, s.x);
+          const inSpeed = (baseSpd + beatSpike) * 1.5;
+          const newR = r - inSpeed;
+          const spinSpeed = 0.012 * energyMult * (0.5 + sectionIntensity * 0.5);
+          const newTheta = theta + spinSpeed;
+          s.x = Math.cos(newTheta) * Math.max(0.001, newR);
+          s.y = Math.sin(newTheta) * Math.max(0.001, newR);
+          // Respawn at outer ring
+          if (newR <= 0.005) {
+            const a = Math.random() * Math.PI * 2;
+            const spawnR = 0.7 + Math.random() * 0.3;
+            s.x = Math.cos(a) * spawnR; s.y = Math.sin(a) * spawnR;
+            s.z = Math.random(); s.hue = Math.random();
+            continue;
           }
+          const sx = cx + s.x * cx, sy = cy + s.y * cy;
+          const proximity = 1 - Math.hypot(s.x, s.y);
+          const size = Math.max(0.3, proximity * proximity * (4 + mids * 6 * sens));
+          const color = liveColors[Math.floor(s.hue * liveColors.length)];
+          ctx.globalAlpha = Math.min(1, proximity * 2) * (0.4 + highs * 0.6);
+          // Trail
+          if (burst > 0.05) {
+            const prevSx = cx + prevX * cx, prevSy = cy + prevY * cy;
+            ctx.strokeStyle = color; ctx.lineWidth = size * 0.4;
+            ctx.globalAlpha *= 0.7;
+            ctx.beginPath(); ctx.moveTo(prevSx, prevSy); ctx.lineTo(sx, sy); ctx.stroke();
+            ctx.globalAlpha = Math.min(1, proximity * 2) * (0.4 + highs * 0.6);
+          }
+          ctx.fillStyle = color;
+          ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
         }
-
-        // Glow halo on close stars (proximity > 0.6)
-        if (proximity > 0.6 && size > 1.5) {
-          ctx.shadowColor = color;
-          ctx.shadowBlur = size * 3;
-        }
-
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(sx, sy, size, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-      }
-      ctx.globalAlpha = 1;
-
-      // Shockwave ring on strong beat onset — tight, bright, fast
-      if (isBeat && bassOnset > 0.07) {
-        const ringR = Math.min(w, h) * (0.05 + bassOnset * 0.22);
-        ctx.strokeStyle = liveColors[0];
-        ctx.lineWidth = 2 + bassOnset * 4;
-        ctx.globalAlpha = Math.min(0.85, bassOnset * 3);
-        ctx.shadowColor = liveColors[0];
-        ctx.shadowBlur = 18;
-        ctx.beginPath();
-        ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
+        // Centre singularity glow
+        const singGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(w,h) * 0.06 * (1 + burst));
+        singGrad.addColorStop(0, liveColors[0]);
+        singGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = singGrad; ctx.globalAlpha = 0.6 + burst * 0.4;
+        ctx.beginPath(); ctx.arc(cx, cy, Math.min(w,h) * 0.06 * (1 + burst), 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
+
+      } else {
+        // ── Starfield (default) ─────────────────────────────────────────
+        const baseSpd = 0.00025 + bSpeed * 0.0012;
+        const beatSpike = burst * bResp * 0.10 * sens;
+        const speed = (baseSpd + beatSpike) * energyMult;
+        const focal = Math.min(w, h) * 0.68;
+        for (const s of starsRef.current) {
+          const prevZ = s.z;
+          s.z -= speed;
+          if (s.z <= 0.003) {
+            s.x = (Math.random() - 0.5) * 2; s.y = (Math.random() - 0.5) * 2;
+            s.z = 0.88 + Math.random() * 0.12; s.hue = Math.random();
+            continue;
+          }
+          const sx = cx + (s.x / s.z) * focal;
+          const sy = cy + (s.y / s.z) * focal;
+          if (sx < -40 || sx > w + 40 || sy < -40 || sy > h + 40) continue;
+          const proximity = 1 - s.z;
+          const proxSq = proximity * proximity;
+          const size = Math.max(0.25, proxSq * (4.5 + mids * 8 * sens));
+          const alpha = Math.min(1, proximity * 1.8) * (0.35 + highs * 0.65);
+          const color = liveColors[Math.floor(s.hue * liveColors.length)] || liveColors[0];
+          ctx.globalAlpha = alpha;
+          if (burst > 0.05 && prevZ > 0) {
+            const prevSx = cx + (s.x / prevZ) * focal;
+            const prevSy = cy + (s.y / prevZ) * focal;
+            const trailLen = Math.hypot(sx - prevSx, sy - prevSy);
+            if (trailLen > 1.2 && trailLen < 100) {
+              ctx.strokeStyle = color; ctx.lineWidth = Math.max(0.4, size * 0.45);
+              ctx.lineCap = 'round'; ctx.globalAlpha = alpha * Math.min(1, burst * 1.5);
+              ctx.beginPath(); ctx.moveTo(prevSx, prevSy); ctx.lineTo(sx, sy); ctx.stroke();
+              ctx.globalAlpha = alpha;
+            }
+          }
+          if (proximity > 0.6 && size > 1.5) { ctx.shadowColor = color; ctx.shadowBlur = size * 3; }
+          ctx.fillStyle = color;
+          ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+        ctx.globalAlpha = 1;
+        if (isBeat && bassOnset > 0.07) {
+          ctx.strokeStyle = liveColors[0]; ctx.lineWidth = 2 + bassOnset * 4;
+          ctx.globalAlpha = Math.min(0.85, bassOnset * 3);
+          ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 18;
+          ctx.beginPath(); ctx.arc(cx, cy, Math.min(w,h) * (0.05 + bassOnset * 0.22), 0, Math.PI * 2); ctx.stroke();
+          ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+        }
       }
 
     // ── Audio Terrain (upgraded: fog, cinematic camera, better heights) ──
@@ -787,9 +960,11 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.strokeStyle = c;
         ctx.lineWidth   = 1.2 + bass * 5 * sens;
         ctx.beginPath();
-        const sides = 6;
+        // sides: hex=6, circle≈36, square=4
+        const sides = vrnt === 'circle' ? 36 : vrnt === 'square' ? 4 : 6;
+        const angleOffset = vrnt === 'square' ? Math.PI / 4 : 0;
         for (let s = 0; s <= sides; s++) {
-          const a = (s / sides) * Math.PI * 2;
+          const a = (s / sides) * Math.PI * 2 + angleOffset;
           const x = Math.cos(a) * r, y = Math.sin(a) * r;
           if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
@@ -1897,6 +2072,35 @@ if (dbExports.length > 0) {
                     ))}
                   </div>
                 ))}
+
+                {/* ── Style variant picker — only shown when variants exist ── */}
+                {VARIANTS[engine] && (
+                  <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                    <div className="text-[10px] uppercase tracking-wider text-purple-300 mb-2">Style variant</div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {VARIANTS[engine]!.map((v) => {
+                        const active = variant === v.id || (variant === '' && v === VARIANTS[engine]![0]);
+                        return (
+                          <button
+                            key={v.id}
+                            onClick={() => setVariant(v.id === VARIANTS[engine]![0].id ? '' : v.id)}
+                            title={v.description}
+                            className={`py-1.5 px-2 rounded-lg border text-xs text-center transition-all ${
+                              active
+                                ? 'bg-purple-500/30 border-purple-400/60 text-purple-100 font-semibold'
+                                : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
+                            }`}
+                          >
+                            {v.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-gray-600 mt-1.5">
+                      {VARIANTS[engine]!.find(v => variant === v.id || (variant === '' && v === VARIANTS[engine]![0]))?.description}
+                    </p>
+                  </div>
+                )}
               </TabsContent>
  
               {/* ── Motion ──────────────────────────────────────── */}
