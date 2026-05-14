@@ -301,10 +301,13 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const exportMode = useMemo(() => getExportMode(), []);
 
   // ── Sync state → refs (MUST be defined before drawFrame effect) ───────────
-  useEffect(() => { engineRef.current       = engine;          }, [engine]);
-  useEffect(() => { variantRef.current      = variant;         }, [variant]);
-  // Reset variant when switching engine so default always applies
-  useEffect(() => { setVariant('');                            }, [engine]);
+  // Reset engine-specific buffers when engine or variant changes
+  useEffect(() => { starsRef.current = []; }, [engine]);
+  useEffect(() => {
+    starsRef.current = [];
+    spheresRef.current = [];
+    planetsRef.current = [];
+  }, [variant]);
   useEffect(() => { paletteRef.current      = palette;         }, [palette]);
   useEffect(() => { beatSensRef.current     = beatSensitivity; }, [beatSensitivity]);
   useEffect(() => { particleDensRef.current = particleDensity; }, [particleDensity]);
@@ -913,26 +916,78 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
       // Terrain mesh — amplitude scales with sectionIntensity + energyMult + beat burst
       const ampScale = (0.5 + sectionIntensity * 0.5) * energyMult * (1 + elevBurst * 0.6);
-      for (let r = 0; r < rows; r++) {
-        const t = r / rows;
-        const yPersp = horizon + (h - horizon) * Math.pow(t, 1.55);
-        const scale  = Math.pow(t, 1.3);
-        const fogFactor = Math.max(0, 1 - t * 2.2);
-        const alpha = (0.1 + scale * 0.8) * (1 - fogFactor * 0.75);
-        ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % liveColors.length])}, ${alpha})`;
-        ctx.lineWidth = 0.5 + scale * 1.8;
-        ctx.beginPath();
-        for (let c = 0; c <= cols; c++) {
-          const idx = Math.floor((c / cols) * (freq.length / 2));
-          const fv  = (freq[idx] / 255) * sens;
-          const bassH     = bass * 130 * scale * sens * (0.4 + fv * 0.6) * ampScale;
-          const midRipple = Math.sin((c + cameraTRef.current * 5 + r * 0.7) * 0.6) * mids * 45 * scale * sens * ampScale;
-          const shimmer   = Math.sin((c * 4 + cameraTRef.current * 18) * 1.2) * highs * 6 * scale;
-          const height    = fv * 55 * scale * ampScale + bassH + midRipple + shimmer;
-          const x = (c / cols) * w, y = yPersp - height;
-          if (c === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+
+      if (vrnt === 'solid') {
+        // ── Solid: filled terrain polygons with gradient sky ─────────────
+        // Sky gradient above horizon
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, horizon);
+        skyGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[0])}, ${0.35 + highs * 0.45})`);
+        skyGrad.addColorStop(0.7, `rgba(${hexToRgb(liveColors[1])}, ${0.08 + bass * 0.15})`);
+        skyGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = skyGrad; ctx.fillRect(0, 0, w, horizon);
+
+        // Draw filled terrain from back to front so near rows cover far ones
+        for (let r = rows - 1; r >= 0; r--) {
+          const t = r / rows;
+          const yPersp = horizon + (h - horizon) * Math.pow(t, 1.55);
+          const yPerspNext = horizon + (h - horizon) * Math.pow((r + 1) / rows, 1.55);
+          const scale = Math.pow(t, 1.3);
+
+          // Build top edge points
+          const topPts: [number, number][] = [];
+          for (let c = 0; c <= cols; c++) {
+            const idx = Math.floor((c / cols) * (freq.length / 2));
+            const fv  = (freq[idx] / 255) * sens;
+            const bassH     = bass * 130 * scale * sens * (0.4 + fv * 0.6) * ampScale;
+            const midRipple = Math.sin((c + cameraTRef.current * 5 + r * 0.7) * 0.6) * mids * 45 * scale * sens * ampScale;
+            const shimmer   = Math.sin((c * 4 + cameraTRef.current * 18) * 1.2) * highs * 6 * scale;
+            const height    = fv * 55 * scale * ampScale + bassH + midRipple + shimmer;
+            topPts.push([(c / cols) * w, yPersp - height]);
+          }
+
+          // Filled polygon
+          const fillGrad = ctx.createLinearGradient(0, yPersp - 200, 0, yPerspNext);
+          const depth = 1 - t;
+          fillGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[r % liveColors.length])}, ${0.55 + depth * 0.3})`);
+          fillGrad.addColorStop(1, `rgba(${hexToRgb(liveColors[(r + 1) % liveColors.length])}, ${0.2 + depth * 0.2})`);
+          ctx.fillStyle = fillGrad;
+          ctx.beginPath();
+          ctx.moveTo(0, yPerspNext);
+          topPts.forEach(([x, y]) => ctx.lineTo(x, y));
+          ctx.lineTo(w, yPerspNext);
+          ctx.closePath();
+          ctx.fill();
+
+          // Bright edge line on top
+          ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % liveColors.length])}, ${0.5 + scale * 0.4})`;
+          ctx.lineWidth = 1 + scale * 1.5;
+          ctx.beginPath();
+          topPts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
+          ctx.stroke();
         }
-        ctx.stroke();
+      } else {
+        // ── Wireframe (default): mesh grid lines ─────────────────────────
+        for (let r = 0; r < rows; r++) {
+          const t = r / rows;
+          const yPersp = horizon + (h - horizon) * Math.pow(t, 1.55);
+          const scale  = Math.pow(t, 1.3);
+          const fogFactor = Math.max(0, 1 - t * 2.2);
+          const alpha = (0.1 + scale * 0.8) * (1 - fogFactor * 0.75);
+          ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % liveColors.length])}, ${alpha})`;
+          ctx.lineWidth = 0.5 + scale * 1.8;
+          ctx.beginPath();
+          for (let c = 0; c <= cols; c++) {
+            const idx = Math.floor((c / cols) * (freq.length / 2));
+            const fv  = (freq[idx] / 255) * sens;
+            const bassH     = bass * 130 * scale * sens * (0.4 + fv * 0.6) * ampScale;
+            const midRipple = Math.sin((c + cameraTRef.current * 5 + r * 0.7) * 0.6) * mids * 45 * scale * sens * ampScale;
+            const shimmer   = Math.sin((c * 4 + cameraTRef.current * 18) * 1.2) * highs * 6 * scale;
+            const height    = fv * 55 * scale * ampScale + bassH + midRipple + shimmer;
+            const x = (c / cols) * w, y = yPersp - height;
+            if (c === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
       }
 
       // Atmospheric fog
@@ -954,61 +1009,115 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
       // Tunnel variant: circle/square still use tunnel engine but aurora ignores vrnt
       const numRibbons = perf ? 5 : 9;
-      for (let ri = 0; ri < numRibbons; ri++) {
-        const bandLo = Math.floor((ri / numRibbons) * freq.length * 0.5);
-        const bandHi = Math.floor(((ri + 1) / numRibbons) * freq.length * 0.5);
-        const bandVal = avg(freq, bandLo, bandHi) * sens * energyMult;
-        const color = liveColors[ri % liveColors.length];
 
-        // Each ribbon = a horizontal wavy band
-        const ribbonY = h * (0.1 + ri / numRibbons * 0.8);
-        const amplitude = (20 + bandVal * h * 0.22) * (0.4 + sectionIntensity * 0.6);
-        const freq2 = 2.5 + ri * 0.7;
-        const phaseShift = t * (0.8 + ri * 0.15);
+      if (vrnt === 'vertical') {
+        // ── Vertical: columns rising from the bottom ─────────────────────
+        for (let ri = 0; ri < numRibbons; ri++) {
+          const bandLo = Math.floor((ri / numRibbons) * freq.length * 0.5);
+          const bandHi = Math.floor(((ri + 1) / numRibbons) * freq.length * 0.5);
+          const bandVal = avg(freq, bandLo, bandHi) * sens * energyMult;
+          const color = liveColors[ri % liveColors.length];
 
-        ctx.save();
-        ctx.globalAlpha = (0.12 + bandVal * 0.55) * (0.5 + sectionIntensity * 0.5);
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 18 + bandVal * 40;
+          const colX = w * (0.05 + ri / numRibbons * 0.9);
+          const amplitude = (20 + bandVal * w * 0.12) * (0.4 + sectionIntensity * 0.6);
+          const freq2 = 2.5 + ri * 0.7;
+          const phaseShift = t * (0.8 + ri * 0.15);
 
-        const grad = ctx.createLinearGradient(0, 0, w, 0);
-        grad.addColorStop(0,   `rgba(${hexToRgb(color)}, 0)`);
-        grad.addColorStop(0.2, color);
-        grad.addColorStop(0.8, color);
-        grad.addColorStop(1,   `rgba(${hexToRgb(color)}, 0)`);
-        ctx.strokeStyle = grad;
-        ctx.lineWidth = 2 + bandVal * 12 * (0.5 + sectionIntensity * 0.5);
-        ctx.lineCap = 'round';
+          ctx.save();
+          ctx.globalAlpha = (0.12 + bandVal * 0.55) * (0.5 + sectionIntensity * 0.5);
+          ctx.shadowColor = color; ctx.shadowBlur = 18 + bandVal * 40;
 
-        ctx.beginPath();
-        const steps = perf ? 40 : 80;
-        for (let s = 0; s <= steps; s++) {
-          const x = (s / steps) * w;
-          // Two sine waves add complexity
-          const y = ribbonY
-            + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
-            + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
-          s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        }
-        ctx.stroke();
+          // Vertical gradient (fades at top and bottom)
+          const vgrad = ctx.createLinearGradient(0, 0, 0, h);
+          vgrad.addColorStop(0,   `rgba(${hexToRgb(color)}, 0)`);
+          vgrad.addColorStop(0.2, color);
+          vgrad.addColorStop(0.8, color);
+          vgrad.addColorStop(1,   `rgba(${hexToRgb(color)}, 0)`);
+          ctx.strokeStyle = vgrad;
+          ctx.lineWidth = 2 + bandVal * 14 * (0.5 + sectionIntensity * 0.5);
+          ctx.lineCap = 'round';
 
-        // Glow fill under the ribbon on high energy
-        if (bandVal > 0.35 && !perf) {
-          ctx.globalAlpha *= 0.25;
-          ctx.fillStyle = grad;
+          const steps = perf ? 40 : 80;
           ctx.beginPath();
-          ctx.moveTo(0, ribbonY);
+          for (let s = 0; s <= steps; s++) {
+            const y = (s / steps) * h;
+            const x = colX
+              + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
+              + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
+            s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+
+          // Fill beside column on high energy
+          if (bandVal > 0.35 && !perf) {
+            ctx.globalAlpha *= 0.2;
+            ctx.fillStyle = vgrad;
+            ctx.beginPath();
+            ctx.moveTo(colX, 0);
+            for (let s = 0; s <= steps; s++) {
+              const y = (s / steps) * h;
+              const x = colX + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude;
+              ctx.lineTo(x, y);
+            }
+            ctx.lineTo(colX + amplitude, h); ctx.lineTo(colX + amplitude, 0);
+            ctx.closePath(); ctx.fill();
+          }
+          ctx.restore();
+        }
+      } else {
+        // ── Aurora (default): horizontal ribbons ─────────────────────────
+        for (let ri = 0; ri < numRibbons; ri++) {
+          const bandLo = Math.floor((ri / numRibbons) * freq.length * 0.5);
+          const bandHi = Math.floor(((ri + 1) / numRibbons) * freq.length * 0.5);
+          const bandVal = avg(freq, bandLo, bandHi) * sens * energyMult;
+          const color = liveColors[ri % liveColors.length];
+
+          const ribbonY = h * (0.1 + ri / numRibbons * 0.8);
+          const amplitude = (20 + bandVal * h * 0.22) * (0.4 + sectionIntensity * 0.6);
+          const freq2 = 2.5 + ri * 0.7;
+          const phaseShift = t * (0.8 + ri * 0.15);
+
+          ctx.save();
+          ctx.globalAlpha = (0.12 + bandVal * 0.55) * (0.5 + sectionIntensity * 0.5);
+          ctx.shadowColor = color; ctx.shadowBlur = 18 + bandVal * 40;
+
+          const grad = ctx.createLinearGradient(0, 0, w, 0);
+          grad.addColorStop(0,   `rgba(${hexToRgb(color)}, 0)`);
+          grad.addColorStop(0.2, color);
+          grad.addColorStop(0.8, color);
+          grad.addColorStop(1,   `rgba(${hexToRgb(color)}, 0)`);
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = 2 + bandVal * 12 * (0.5 + sectionIntensity * 0.5);
+          ctx.lineCap = 'round';
+
+          const steps = perf ? 40 : 80;
+          ctx.beginPath();
           for (let s = 0; s <= steps; s++) {
             const x = (s / steps) * w;
             const y = ribbonY
               + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
               + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
-            ctx.lineTo(x, y);
+            s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
           }
-          ctx.lineTo(w, ribbonY + amplitude); ctx.lineTo(0, ribbonY + amplitude);
-          ctx.closePath(); ctx.fill();
+          ctx.stroke();
+
+          if (bandVal > 0.35 && !perf) {
+            ctx.globalAlpha *= 0.25;
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.moveTo(0, ribbonY);
+            for (let s = 0; s <= steps; s++) {
+              const x = (s / steps) * w;
+              const y = ribbonY
+                + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
+                + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
+              ctx.lineTo(x, y);
+            }
+            ctx.lineTo(w, ribbonY + amplitude); ctx.lineTo(0, ribbonY + amplitude);
+            ctx.closePath(); ctx.fill();
+          }
+          ctx.restore();
         }
-        ctx.restore();
       }
       ctx.globalAlpha = 1; ctx.shadowBlur = 0;
     } else if (eng === 'neon_spheres') {
@@ -1039,18 +1148,32 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       }
 
       const bandStep = Math.floor(freq.length / N);
+
+      // Orbit variant: each sphere orbits the centre at its own radius
+      const orbitMode = vrnt === 'orbit';
+      const orbitCx = 0.5, orbitCy = 0.5;
+
       for (let i = 0; i < N; i++) {
         const sp  = spheresRef.current[i];
         const be  = avg(freq, i * bandStep, (i + 1) * bandStep);
 
-        // Drift speed scales with section + beat burst on this sphere's band
-        const driftSpeed = baseMotion * 0.03;
-        sp.x += sp.vx + Math.sin(solarTRef.current * 0.6 + sp.phase) * driftSpeed;
-        sp.y += sp.vy + Math.cos(solarTRef.current * 0.45 + sp.phase * 1.3) * driftSpeed;
-        sp.x  = Math.max(0.07, Math.min(0.93, sp.x));
-        sp.y  = Math.max(0.07, Math.min(0.93, sp.y));
-        if (sp.x <= 0.07 || sp.x >= 0.93) sp.vx *= -1;
-        if (sp.y <= 0.07 || sp.y >= 0.93) sp.vy *= -1;
+        if (orbitMode) {
+          // Fixed orbital radius per sphere, speed modulated by energy
+          const orbitR = 0.12 + i * 0.06 * (0.8 + be * 0.4);
+          const orbitSpeed = baseMotion * (0.6 + i * 0.2) * (0.5 + sectionIntensity * 0.5);
+          sp.phase += orbitSpeed;
+          sp.x = orbitCx + Math.cos(sp.phase) * orbitR;
+          sp.y = orbitCy + Math.sin(sp.phase) * orbitR * 0.7; // slight ellipse
+        } else {
+          // Float (default): freeform drift
+          const driftSpeed = baseMotion * 0.03;
+          sp.x += sp.vx + Math.sin(solarTRef.current * 0.6 + sp.phase) * driftSpeed;
+          sp.y += sp.vy + Math.cos(solarTRef.current * 0.45 + sp.phase * 1.3) * driftSpeed;
+          sp.x  = Math.max(0.07, Math.min(0.93, sp.x));
+          sp.y  = Math.max(0.07, Math.min(0.93, sp.y));
+          if (sp.x <= 0.07 || sp.x >= 0.93) sp.vx *= -1;
+          if (sp.y <= 0.07 || sp.y >= 0.93) sp.vy *= -1;
+        }
 
         const sx = sp.x * w, sy = sp.y * h;
         const minDim = Math.min(w, h);
@@ -1077,20 +1200,22 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           ctx.beginPath(); ctx.arc(sx - r * 0.3, sy - r * 0.3, r * 0.12, 0, Math.PI * 2); ctx.fill();
         }
 
-        // Connection lines between close spheres at high energy
-        if (sectionIntensity > 0.6) {
+        // In orbit mode: draw orbit path; in float mode: connection lines
+        if (orbitMode) {
+          // Draw faint orbit ring
+          const orbitR = (0.12 + i * 0.06) * Math.min(w, h);
+          ctx.strokeStyle = color; ctx.lineWidth = 0.5;
+          ctx.globalAlpha = 0.12 + be * 0.15;
+          ctx.beginPath(); ctx.ellipse(w * orbitCx, h * orbitCy, orbitR, orbitR * 0.7, 0, 0, Math.PI * 2); ctx.stroke();
+        } else if (sectionIntensity > 0.6) {
           for (let j = i + 1; j < N; j++) {
             const sp2 = spheresRef.current[j];
             const dist = Math.hypot(sp.x - sp2.x, sp.y - sp2.y);
             if (dist < 0.22) {
               const lineAlpha = (0.22 - dist) / 0.22 * 0.4 * sectionIntensity;
-              ctx.strokeStyle = color;
-              ctx.lineWidth = 0.8;
+              ctx.strokeStyle = color; ctx.lineWidth = 0.8;
               ctx.globalAlpha = lineAlpha;
-              ctx.beginPath();
-              ctx.moveTo(sx, sy);
-              ctx.lineTo(sp2.x * w, sp2.y * h);
-              ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sp2.x * w, sp2.y * h); ctx.stroke();
             }
           }
         }
