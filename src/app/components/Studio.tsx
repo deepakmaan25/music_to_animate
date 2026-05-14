@@ -83,10 +83,10 @@ const ENGINES: { id: EngineId; name: string; description: string; group: '2D' | 
   { id: 'orbital',     name: 'Orbital Rings',         description: 'Concentric rings tilt and pulse around a glowing core.', group: '3D' },
   { id: 'depth',       name: 'Depth Field Particles', description: 'Cinematic starfield that surges on every beat.',        group: '3D' },
   { id: 'terrain',     name: 'Audio Terrain',         description: 'Wireframe landscape that reacts to every frequency.',  group: '3D' },
-  { id: 'tunnel',      name: 'Neon Tunnel',           description: 'Glowing tunnel pulsing with bass and highs.',          group: '3D' },
+  { id: 'tunnel',      name: 'Liquid Aurora',         description: 'Flowing colour curtains that ripple with every frequency.',  group: '3D' },
   { id: 'neon_spheres',name: 'Neon Spheres',          description: 'Glowing spheres wobbling and scaling with audio.',     group: '3D' },
   { id: 'fractal',     name: 'Fractal Kaleidoscope',  description: 'Mirrored tiling pattern; rotation tied to energy.',    group: '3D' },
-  { id: 'solar',       name: 'Solar System',          description: 'Central sun with orbiting bodies; flares on bass.',    group: '3D' },
+  { id: 'solar',       name: 'Geometric Pulse',       description: 'Concentric beat rings expand and shatter on every drop.', group: '3D' },
 ];
 
 // ─── Engine style variants ────────────────────────────────────────────────────
@@ -110,6 +110,15 @@ const VARIANTS: Partial<Record<EngineId, { id: string; label: string; descriptio
     { id: 'hex',    label: 'Hex',    description: 'Hexagonal rings (default)' },
     { id: 'circle', label: 'Circle', description: 'Perfect circle rings' },
     { id: 'square', label: 'Square', description: 'Square rings with sharp corners' },
+  ],
+  tunnel: [
+    { id: 'aurora',  label: 'Aurora',  description: 'Layered horizontal ribbon curtains (default)' },
+    { id: 'vertical', label: 'Vertical', description: 'Vertical ribbon columns — like a visualizer waterfall' },
+  ],
+  solar: [
+    { id: 'circle', label: 'Circle',  description: 'Smooth circular expanding rings (default)' },
+    { id: 'hex',    label: 'Hex',     description: 'Hexagonal rings on every beat' },
+    { id: 'square', label: 'Square',  description: 'Square rings that rotate on beat' },
   ],
   terrain: [
     { id: 'wireframe', label: 'Wireframe', description: 'Mesh grid lines (default)' },
@@ -935,56 +944,73 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
     // ── Neon Tunnel (upgraded: glow, bass zoom, mids brightness) ─────────
     } else if (eng === 'tunnel') {
-      ctx.fillStyle = 'rgba(0,0,6,0.32)';
+      // ── Liquid Aurora — flowing colour curtains ───────────────────────
+      ctx.fillStyle = `rgba(2,2,10,${0.18 + (1-sectionIntensity)*0.08})`;
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      tunnelTRef.current += (0.01 + bass * 0.07 * sens) * energyMult;
-      const cx = w / 2, cy = h / 2;
-      const segments = perf ? 12 : 24;
-      const roll = Math.sin(tunnelTRef.current * 0.25) * 0.06;
-      const scalePulse = 1 + bass * 0.35 * sens * sectionIntensity;
-      for (let i = segments - 1; i >= 0; i--) {
-        const z      = ((i + tunnelTRef.current) % segments) / segments;
-        const scale  = (1 - z) * scalePulse;
-        const r      = Math.min(w, h) * 0.5 * scale;
-        const alpha  = Math.pow(1 - z, 1.3);
-        if (r < 2) continue;
+      tunnelTRef.current += (0.004 + mids * 0.008 * sens) * energyMult;
+      const t = tunnelTRef.current;
+      const cx2 = w / 2;
+
+      // Tunnel variant: circle/square still use tunnel engine but aurora ignores vrnt
+      const numRibbons = perf ? 5 : 9;
+      for (let ri = 0; ri < numRibbons; ri++) {
+        const bandLo = Math.floor((ri / numRibbons) * freq.length * 0.5);
+        const bandHi = Math.floor(((ri + 1) / numRibbons) * freq.length * 0.5);
+        const bandVal = avg(freq, bandLo, bandHi) * sens * energyMult;
+        const color = liveColors[ri % liveColors.length];
+
+        // Each ribbon = a horizontal wavy band
+        const ribbonY = h * (0.1 + ri / numRibbons * 0.8);
+        const amplitude = (20 + bandVal * h * 0.22) * (0.4 + sectionIntensity * 0.6);
+        const freq2 = 2.5 + ri * 0.7;
+        const phaseShift = t * (0.8 + ri * 0.15);
+
         ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate(roll * (1 - z));
-        const c = liveColors[i % liveColors.length];
-        const bright = 0.3 + mids * 0.9 * sens; // mids drive brightness
-        ctx.globalAlpha = Math.min(1, alpha * bright);
-        ctx.shadowColor = c;
-        ctx.shadowBlur  = 10 + mids * 25 * sens;
-        ctx.strokeStyle = c;
-        ctx.lineWidth   = 1.2 + bass * 5 * sens;
+        ctx.globalAlpha = (0.12 + bandVal * 0.55) * (0.5 + sectionIntensity * 0.5);
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 18 + bandVal * 40;
+
+        const grad = ctx.createLinearGradient(0, 0, w, 0);
+        grad.addColorStop(0,   `rgba(${hexToRgb(color)}, 0)`);
+        grad.addColorStop(0.2, color);
+        grad.addColorStop(0.8, color);
+        grad.addColorStop(1,   `rgba(${hexToRgb(color)}, 0)`);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 2 + bandVal * 12 * (0.5 + sectionIntensity * 0.5);
+        ctx.lineCap = 'round';
+
         ctx.beginPath();
-        // sides: hex=6, circle≈36, square=4
-        const sides = vrnt === 'circle' ? 36 : vrnt === 'square' ? 4 : 6;
-        const angleOffset = vrnt === 'square' ? Math.PI / 4 : 0;
-        for (let s = 0; s <= sides; s++) {
-          const a = (s / sides) * Math.PI * 2 + angleOffset;
-          const x = Math.cos(a) * r, y = Math.sin(a) * r;
-          if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        const steps = perf ? 40 : 80;
+        for (let s = 0; s <= steps; s++) {
+          const x = (s / steps) * w;
+          // Two sine waves add complexity
+          const y = ribbonY
+            + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
+            + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
+          s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         }
         ctx.stroke();
-        // Rim sparks on highs — soft-limited (max 1 per ring per frame)
-        if (highs > 0.4 && alpha > 0.25 && Math.random() < highs * 0.14) {
-          const sa = Math.random() * Math.PI * 2;
-          ctx.globalAlpha = Math.min(0.75, alpha * highs);
-          ctx.fillStyle   = liveColors[0];
-          ctx.shadowBlur  = 8;
+
+        // Glow fill under the ribbon on high energy
+        if (bandVal > 0.35 && !perf) {
+          ctx.globalAlpha *= 0.25;
+          ctx.fillStyle = grad;
           ctx.beginPath();
-          ctx.arc(Math.cos(sa) * r, Math.sin(sa) * r, 2, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.moveTo(0, ribbonY);
+          for (let s = 0; s <= steps; s++) {
+            const x = (s / steps) * w;
+            const y = ribbonY
+              + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
+              + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
+            ctx.lineTo(x, y);
+          }
+          ctx.lineTo(w, ribbonY + amplitude); ctx.lineTo(0, ribbonY + amplitude);
+          ctx.closePath(); ctx.fill();
         }
         ctx.restore();
       }
-      ctx.globalAlpha = 1;
-      ctx.shadowBlur  = 0;
-
-    // ── Neon Spheres ──────────────────────────────────────────────────────
+      ctx.globalAlpha = 1; ctx.shadowBlur = 0;
     } else if (eng === 'neon_spheres') {
       ctx.fillStyle = `rgba(2,2,10,${0.22 + (1 - sectionIntensity) * 0.08})`;
       ctx.fillRect(0, 0, w, h);
@@ -1120,87 +1146,95 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
     // ── Solar System (new) ────────────────────────────────────────────────
     } else if (eng === 'solar') {
-      ctx.fillStyle = 'rgba(1,1,8,0.28)';
+      // ── Geometric Pulse — concentric beat rings ───────────────────────
+      ctx.fillStyle = `rgba(2,2,10,${0.28 + (1-sectionIntensity)*0.10})`;
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      // Orbit speed scales with section — crawl at breakdown, surge at drop
-      solarTRef.current += (0.004 + bass * 0.012 * sens) * energyMult * (0.4 + sectionIntensity * 0.6);
+      solarTRef.current += (0.006 + bass * 0.018 * sens) * energyMult;
+      const t = solarTRef.current;
       const cx = w / 2, cy = h / 2;
       const minDim = Math.min(w, h);
-      if (planetsRef.current.length < 5) {
-        planetsRef.current = [
-          { angle: 0,   speed: 0.013, dist: 0.11, size: 0.014, color: 0 },
-          { angle: 1.2, speed: 0.008, dist: 0.18, size: 0.020, color: 1 },
-          { angle: 2.8, speed: 0.005, dist: 0.26, size: 0.017, color: 2 },
-          { angle: 0.5, speed: 0.003, dist: 0.34, size: 0.026, color: 0 },
-          { angle: 3.9, speed: 0.002, dist: 0.42, size: 0.019, color: 1 },
-        ];
+
+      // Beat onset for ring spawn
+      const geoOnset = Math.max(0, bass - prevBassRef.current);
+      if (eng === 'solar') prevBassRef.current = bass;
+      if (geoOnset > 0.05) smoothedBurstRef.current = Math.min(1, smoothedBurstRef.current + geoOnset * 2.5);
+      smoothedBurstRef.current *= 0.84;
+      const burst = smoothedBurstRef.current;
+
+      // Spawn new rings on beat — stored in planetsRef as { r, maxR, alpha, colorIdx, sides }
+      if (!planetsRef.current) planetsRef.current = [];
+      if (geoOnset > 0.06 && planetsRef.current.length < 20) {
+        const sides = vrnt === 'square' ? 4 : vrnt === 'hex' ? 6 : 0; // 0 = circle
+        planetsRef.current.push({
+          r: minDim * 0.04,
+          maxR: minDim * (0.28 + geoOnset * 0.45) * (0.6 + sectionIntensity * 0.4),
+          alpha: Math.min(0.9, geoOnset * 2.2),
+          colorIdx: Math.floor(Math.random() * liveColors.length),
+          sides,
+          thickness: 1.5 + geoOnset * 5,
+        } as any);
       }
-      // Sun — larger and brighter at high-energy sections
-      const sunR = minDim * 0.055 * (1 + bass * sens * 0.55) * (0.75 + sectionIntensity * 0.25);
-      ctx.save();
-      ctx.shadowColor = liveColors[0]; ctx.shadowBlur = (50 + bass * 80 * sens) * (0.5 + sectionIntensity * 0.5);
-      const sunG = ctx.createRadialGradient(cx, cy, 0, cx, cy, sunR * 3.5);
-      sunG.addColorStop(0, '#ffffff');
-      sunG.addColorStop(0.15, liveColors[0]);
-      sunG.addColorStop(0.55, `rgba(${hexToRgb(liveColors[1])}, 0.35)`);
-      sunG.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = sunG;
-      ctx.beginPath(); ctx.arc(cx, cy, sunR * 3.5, 0, Math.PI * 2); ctx.fill();
-      ctx.restore();
-      // Solar flares on strong bass
-      if (bass > 0.55) {
-        for (let f = 0; f < 4; f++) {
-          const a = (f / 4) * Math.PI * 2 + solarTRef.current;
-          const fl = sunR * (1.8 + Math.random() * 2.5) * bass;
-          ctx.strokeStyle = `rgba(${hexToRgb(liveColors[0])}, ${0.25 * bass})`;
-          ctx.lineWidth   = 0.8 + Math.random() * 1.5;
-          ctx.globalAlpha = bass * 0.5;
-          ctx.beginPath();
-          ctx.moveTo(cx + Math.cos(a) * sunR, cy + Math.sin(a) * sunR);
-          ctx.quadraticCurveTo(
-            cx + Math.cos(a + 0.3) * fl * 0.6, cy + Math.sin(a + 0.3) * fl * 0.6,
-            cx + Math.cos(a) * fl, cy + Math.sin(a) * fl
-          );
-          ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
-      }
-      // Orbit rings + planets
-      for (let i = 0; i < planetsRef.current.length; i++) {
-        const p = planetsRef.current[i];
-        const bv = avg(freq, Math.floor(i * (freq.length / 5)), Math.floor((i + 1) * (freq.length / 5)));
-        p.angle += p.speed * (1 + bv * sens * 1.5);
-        const orbitR = p.dist * minDim;
-        ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 0.5;
-        ctx.beginPath(); ctx.arc(cx, cy, orbitR, 0, Math.PI * 2); ctx.stroke();
-        const px = cx + Math.cos(p.angle) * orbitR;
-        const py = cy + Math.sin(p.angle) * orbitR;
-        const pSize  = p.size * minDim * (1 + bv * sens * 0.9);
-        const pColor = liveColors[p.color % liveColors.length];
+
+      // Draw and expand rings
+      planetsRef.current = (planetsRef.current as any[]).filter((ring: any) => {
+        ring.r += (3 + mids * 8 * sens) * energyMult;
+        ring.alpha *= 0.92;
+        if (ring.alpha < 0.02 || ring.r > ring.maxR * 1.2) return false;
+
+        const color = liveColors[ring.colorIdx % liveColors.length];
         ctx.save();
-        ctx.shadowColor = pColor; ctx.shadowBlur = 8 + bv * 18;
-        const pG = ctx.createRadialGradient(px, py, 0, px, py, pSize * 2.2);
-        pG.addColorStop(0, '#ffffff'); pG.addColorStop(0.25, pColor);
-        pG.addColorStop(0.65, `rgba(${hexToRgb(pColor)}, 0.5)`); pG.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = pG; ctx.globalAlpha = 0.8 + bv * 0.2;
-        ctx.beginPath(); ctx.arc(px, py, pSize * 2.2, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = ring.thickness * ring.alpha * 2;
+        ctx.globalAlpha = ring.alpha;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 12 + burst * 20;
+        ctx.beginPath();
+        if (ring.sides === 0) {
+          ctx.arc(cx, cy, ring.r, 0, Math.PI * 2);
+        } else {
+          const rot = t * 0.3;
+          for (let s = 0; s <= ring.sides; s++) {
+            const a = (s / ring.sides) * Math.PI * 2 + rot;
+            const x = cx + Math.cos(a) * ring.r;
+            const y = cy + Math.sin(a) * ring.r;
+            s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
+        ctx.restore();
+        return true;
+      });
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+      // Standing rings: permanent spectrum-driven rings at fixed radii
+      const standingCount = 4;
+      for (let i = 0; i < standingCount; i++) {
+        const r = minDim * (0.10 + i * 0.10 + mids * 0.04 * sens * (0.5 + sectionIntensity * 0.5));
+        const bandVal = avg(freq, Math.floor(i * freq.length / (standingCount * 2)), Math.floor((i+1) * freq.length / (standingCount * 2)));
+        const color = liveColors[i % liveColors.length];
+        const liveR = r * (1 + bandVal * sens * 0.35 * (0.4 + sectionIntensity * 0.6));
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5 + bandVal * 4;
+        ctx.globalAlpha = 0.25 + bandVal * 0.55;
+        ctx.shadowColor = color; ctx.shadowBlur = 4 + bandVal * 18;
+        ctx.beginPath();
+        ctx.arc(cx, cy, liveR, 0, Math.PI * 2);
+        ctx.stroke();
         ctx.restore();
       }
-      // Asteroid belt on mids
-      if (mids > 0.25) {
-        const beltR = minDim * 0.3;
-        const count = Math.floor(mids * 15 * sens);
-        for (let a = 0; a < count; a++) {
-          const angle = Math.random() * Math.PI * 2;
-          const r = beltR + (Math.random() - 0.5) * minDim * 0.025;
-          ctx.fillStyle = `rgba(160,160,200,${mids * 0.45})`;
-          ctx.beginPath();
-          ctx.arc(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r, 1, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-      ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+      // Core glow
+      const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, minDim * 0.06 * (1 + burst * 0.5));
+      coreGrad.addColorStop(0, liveColors[0]);
+      coreGrad.addColorStop(0.4, `rgba(${hexToRgb(liveColors[1])}, 0.4)`);
+      coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = coreGrad;
+      ctx.globalAlpha = 0.7 + burst * 0.3;
+      ctx.beginPath(); ctx.arc(cx, cy, minDim * 0.06 * (1 + burst * 0.5), 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
     }
 
     // ── Post-processing ───────────────────────────────────────────────────
@@ -2064,43 +2098,47 @@ if (dbExports.length > 0) {
                       {group === '3D' && <span className="px-1.5 py-0.5 text-[9px] rounded bg-purple-500/20 text-purple-200 border border-purple-400/30">NEW</span>}
                     </div>
                     {ENGINES.filter((e) => e.group === group).map((e) => (
-                      <button key={e.id} onClick={() => setEngine(e.id)}
-                        className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all text-xs ${engine === e.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
-                        <div className="font-semibold">{e.name}</div>
-                        <div className={`text-[11px] mt-0.5 ${engine === e.id ? 'text-gray-600' : 'text-gray-400'}`}>{e.description}</div>
-                      </button>
+                      <div key={e.id}>
+                        <button onClick={() => setEngine(e.id)}
+                          className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all text-xs ${engine === e.id ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
+                          <div className="font-semibold flex items-center justify-between">
+                            {e.name}
+                            {VARIANTS[e.id] && <span className="text-[9px] opacity-40 font-normal">{VARIANTS[e.id]!.length} styles</span>}
+                          </div>
+                          <div className={`text-[11px] mt-0.5 ${engine === e.id ? 'text-gray-600' : 'text-gray-400'}`}>{e.description}</div>
+                        </button>
+
+                        {/* Variant chips — only shown when this engine is selected */}
+                        {engine === e.id && VARIANTS[e.id] && (
+                          <div className="mt-1.5 ml-1 p-2.5 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                            <div className="flex flex-wrap gap-1.5">
+                              {VARIANTS[e.id]!.map((v) => {
+                                const active = variant === v.id || (variant === '' && v === VARIANTS[e.id]![0]);
+                                return (
+                                  <button
+                                    key={v.id}
+                                    onClick={() => setVariant(v.id === VARIANTS[e.id]![0].id ? '' : v.id)}
+                                    title={v.description}
+                                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-all ${
+                                      active
+                                        ? 'bg-purple-500/25 border-purple-400/50 text-purple-200'
+                                        : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10 hover:text-gray-200'
+                                    }`}
+                                  >
+                                    {v.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <p className="text-[10px] text-gray-600 mt-1.5">
+                              {VARIANTS[e.id]!.find(v => variant === v.id || (variant === '' && v === VARIANTS[e.id]![0]))?.description}
+                            </p>
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 ))}
-
-                {/* ── Style variant picker — only shown when variants exist ── */}
-                {VARIANTS[engine] && (
-                  <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                    <div className="text-[10px] uppercase tracking-wider text-purple-300 mb-2">Style variant</div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {VARIANTS[engine]!.map((v) => {
-                        const active = variant === v.id || (variant === '' && v === VARIANTS[engine]![0]);
-                        return (
-                          <button
-                            key={v.id}
-                            onClick={() => setVariant(v.id === VARIANTS[engine]![0].id ? '' : v.id)}
-                            title={v.description}
-                            className={`py-1.5 px-2 rounded-lg border text-xs text-center transition-all ${
-                              active
-                                ? 'bg-purple-500/30 border-purple-400/60 text-purple-100 font-semibold'
-                                : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
-                            }`}
-                          >
-                            {v.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <p className="text-[10px] text-gray-600 mt-1.5">
-                      {VARIANTS[engine]!.find(v => variant === v.id || (variant === '' && v === VARIANTS[engine]![0]))?.description}
-                    </p>
-                  </div>
-                )}
               </TabsContent>
  
               {/* ── Motion ──────────────────────────────────────── */}
