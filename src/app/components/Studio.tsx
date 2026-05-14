@@ -427,12 +427,12 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const barW = w / bars;
       const midY = h / 2;
 
-      // Waveform underlay — subtle time-domain line behind bars
+      // Waveform underlay — colour-matched to palette
       const tdLen = analyser.frequencyBinCount * 2;
       const tdData = new Uint8Array(tdLen);
       analyser.getByteTimeDomainData(tdData);
       ctx.save();
-      ctx.strokeStyle = `rgba(255,255,255,0.12)`;
+      ctx.strokeStyle = `rgba(${hexToRgb(liveColors[1])}, 0.22)`;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       for (let i = 0; i < tdData.length; i++) {
@@ -648,16 +648,30 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = 'rgba(3,3,12,1)';
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      cameraTRef.current += 0.016 + bass * 0.022 * sens;
+
+      // Beat onset for terrain elevation surge
+      const terrainOnset = Math.max(0, bass - prevBassRef.current);
+      // (prevBassRef is shared; already updated in depth engine if that ran — terrain uses same frame value)
+      if (eng === 'terrain') prevBassRef.current = bass;
+      const terrainBurst = terrainOnset > 0.05 ? terrainOnset : 0;
+      smoothedBurstRef.current = eng === 'terrain'
+        ? (terrainBurst > 0 ? Math.min(1, smoothedBurstRef.current + terrainBurst * 1.8) : smoothedBurstRef.current * 0.85)
+        : smoothedBurstRef.current;
+      const elevBurst = smoothedBurstRef.current;
+
+      cameraTRef.current += (0.016 + bass * 0.022 * sens) * energyMult;
       const cols = perf ? 18 : 34, rows = perf ? 12 : 24;
-      const horizon = h * 0.4;
-      // Sky gradient with atmospheric glow
+      const horizon = h * (0.38 + sectionIntensity * 0.06); // horizon rises at drops
+
+      // Sky gradient
       const sky = ctx.createLinearGradient(0, 0, 0, horizon);
       sky.addColorStop(0, `rgba(${hexToRgb(liveColors[0])}, ${0.18 + highs * 0.4})`);
       sky.addColorStop(0.6, `rgba(${hexToRgb(liveColors[1])}, ${0.04 + bass * 0.12})`);
       sky.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = sky; ctx.fillRect(0, 0, w, horizon);
-      // Terrain mesh
+
+      // Terrain mesh — amplitude scales with sectionIntensity + energyMult + beat burst
+      const ampScale = (0.5 + sectionIntensity * 0.5) * energyMult * (1 + elevBurst * 0.6);
       for (let r = 0; r < rows; r++) {
         const t = r / rows;
         const yPersp = horizon + (h - horizon) * Math.pow(t, 1.55);
@@ -670,17 +684,17 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         for (let c = 0; c <= cols; c++) {
           const idx = Math.floor((c / cols) * (freq.length / 2));
           const fv  = (freq[idx] / 255) * sens;
-          // Bass = big hills, mids = ripple waves, highs = shimmer
-          const bassH    = bass * 130 * scale * sens * (0.4 + fv * 0.6);
-          const midRipple = Math.sin((c + cameraTRef.current * 5 + r * 0.7) * 0.6) * mids * 45 * scale * sens;
+          const bassH     = bass * 130 * scale * sens * (0.4 + fv * 0.6) * ampScale;
+          const midRipple = Math.sin((c + cameraTRef.current * 5 + r * 0.7) * 0.6) * mids * 45 * scale * sens * ampScale;
           const shimmer   = Math.sin((c * 4 + cameraTRef.current * 18) * 1.2) * highs * 6 * scale;
-          const height    = fv * 55 * scale + bassH + midRipple + shimmer;
+          const height    = fv * 55 * scale * ampScale + bassH + midRipple + shimmer;
           const x = (c / cols) * w, y = yPersp - height;
           if (c === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
         ctx.stroke();
       }
-      // Atmospheric fog near horizon
+
+      // Atmospheric fog
       const fog = ctx.createLinearGradient(0, horizon - 30, 0, horizon + 55);
       fog.addColorStop(0, 'rgba(3,3,12,0)');
       fog.addColorStop(0.4, `rgba(${hexToRgb(liveColors[0])}, ${0.06 + bass * 0.08})`);
@@ -736,12 +750,21 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.globalAlpha = 1;
       ctx.shadowBlur  = 0;
 
-    // ── Neon Spheres (new) ────────────────────────────────────────────────
+    // ── Neon Spheres ──────────────────────────────────────────────────────
     } else if (eng === 'neon_spheres') {
-      ctx.fillStyle = 'rgba(2,2,10,0.28)';
+      ctx.fillStyle = `rgba(2,2,10,${0.22 + (1 - sectionIntensity) * 0.08})`;
       ctx.fillRect(0, 0, w, h);
-      const bass = avg(freq, 0, 16), highs = avg(freq, 80, 200);
-      solarTRef.current += 0.018;
+      const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
+
+      // Beat onset for sphere pulse
+      const sphereOnset = Math.max(0, bass - prevBassRef.current);
+      if (eng === 'neon_spheres') prevBassRef.current = bass;
+      const sphereBeat = sphereOnset > 0.05 ? sphereOnset : 0;
+
+      // Speed scales with section intensity — slow in breakdowns, lively in drops
+      const baseMotion = (0.008 + sectionIntensity * 0.016) * energyMult;
+      solarTRef.current += baseMotion;
+
       const N = 6;
       if (spheresRef.current.length < N) {
         spheresRef.current = Array.from({ length: N }, (_, i) => ({
@@ -754,34 +777,62 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           hue: i / N,
         }));
       }
+
       const bandStep = Math.floor(freq.length / N);
       for (let i = 0; i < N; i++) {
         const sp  = spheresRef.current[i];
         const be  = avg(freq, i * bandStep, (i + 1) * bandStep);
-        sp.x += sp.vx + Math.sin(solarTRef.current * 0.6 + sp.phase) * 0.0004;
-        sp.y += sp.vy + Math.cos(solarTRef.current * 0.45 + sp.phase * 1.3) * 0.0004;
+
+        // Drift speed scales with section + beat burst on this sphere's band
+        const driftSpeed = baseMotion * 0.03;
+        sp.x += sp.vx + Math.sin(solarTRef.current * 0.6 + sp.phase) * driftSpeed;
+        sp.y += sp.vy + Math.cos(solarTRef.current * 0.45 + sp.phase * 1.3) * driftSpeed;
         sp.x  = Math.max(0.07, Math.min(0.93, sp.x));
         sp.y  = Math.max(0.07, Math.min(0.93, sp.y));
         if (sp.x <= 0.07 || sp.x >= 0.93) sp.vx *= -1;
         if (sp.y <= 0.07 || sp.y >= 0.93) sp.vy *= -1;
+
         const sx = sp.x * w, sy = sp.y * h;
         const minDim = Math.min(w, h);
-        const r = sp.size * minDim * (1 + be * sens * 1.8) * (1 + bass * 0.25);
+        // Size: band energy + beat pulse + section intensity
+        const beatBoost = i === 0 ? (1 + sphereBeat * 3) : 1; // kick drum hits sphere 0 hardest
+        const r = sp.size * minDim * (1 + be * sens * 2.0) * (1 + bass * 0.3) * (0.7 + sectionIntensity * 0.3) * beatBoost;
         const color = liveColors[i % liveColors.length];
+
         ctx.save();
         ctx.shadowColor = color;
-        ctx.shadowBlur  = 20 + be * 55 * sens;
+        ctx.shadowBlur  = (15 + be * 60 * sens) * (0.6 + sectionIntensity * 0.4);
         const g = ctx.createRadialGradient(sx - r * 0.3, sy - r * 0.3, 0, sx, sy, r * 1.8);
         g.addColorStop(0, '#ffffff');
         g.addColorStop(0.15, color);
         g.addColorStop(0.5, `rgba(${hexToRgb(color)}, 0.5)`);
         g.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.globalAlpha = 0.75 + be * 0.25;
+        ctx.globalAlpha = (0.65 + be * 0.35) * (0.7 + sectionIntensity * 0.3);
         ctx.fillStyle   = g;
         ctx.beginPath(); ctx.arc(sx, sy, r * 1.8, 0, Math.PI * 2); ctx.fill();
-        if (highs > 0.35 && Math.random() < highs * 0.4) {
-          ctx.fillStyle = '#ffffff'; ctx.globalAlpha = highs * 0.7;
-          ctx.beginPath(); ctx.arc(sx - r * 0.3, sy - r * 0.3, r * 0.1, 0, Math.PI * 2); ctx.fill();
+
+        // Specular highlight
+        if (highs > 0.3 && Math.random() < highs * 0.35) {
+          ctx.fillStyle = '#ffffff'; ctx.globalAlpha = highs * 0.65;
+          ctx.beginPath(); ctx.arc(sx - r * 0.3, sy - r * 0.3, r * 0.12, 0, Math.PI * 2); ctx.fill();
+        }
+
+        // Connection lines between close spheres at high energy
+        if (sectionIntensity > 0.6) {
+          for (let j = i + 1; j < N; j++) {
+            const sp2 = spheresRef.current[j];
+            const dist = Math.hypot(sp.x - sp2.x, sp.y - sp2.y);
+            if (dist < 0.22) {
+              const lineAlpha = (0.22 - dist) / 0.22 * 0.4 * sectionIntensity;
+              ctx.strokeStyle = color;
+              ctx.lineWidth = 0.8;
+              ctx.globalAlpha = lineAlpha;
+              ctx.beginPath();
+              ctx.moveTo(sx, sy);
+              ctx.lineTo(sp2.x * w, sp2.y * h);
+              ctx.stroke();
+            }
+          }
         }
         ctx.restore();
       }
@@ -1265,9 +1316,11 @@ if (dbExports.length > 0) {
     const preset = PRESETS.find((p) => p.id === presetId)!;
     const dur = clipDuration === 'full' ? Math.min(project.duration, 180) : (clipDuration as number);
 
+    const trackName = project.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+    const aspectLabel = aspect === '9:16' ? 'TikTok' : aspect === '1:1' ? 'Square' : 'YouTube';
     const job: ExportJob = {
       id: Date.now(),
-      name: `${project.fileName.replace(/\.[^.]+$/, '')}_${aspect.replace(':', 'x')}_${preset.id}`,
+      name: `${trackName} · ${aspectLabel} · ${preset.name}`,
       preset: preset.name, aspect, status: 'recording', progress: 0,
     };
     setExports((x) => [...x, job]);
@@ -1799,18 +1852,24 @@ if (dbExports.length > 0) {
                           {j.status === 'done' && (
                             <div className="flex gap-2">
                               {j.url ? (
-                                /* Local blob available — direct download */
+                                /* Local blob — download + optional cloud download if also synced */
                                 <>
                                   <a href={j.url} download={`${j.name}.${ext}`} className="flex-1">
                                     <Button size="sm" className="w-full bg-white text-gray-900 hover:bg-gray-100 h-7 text-xs">
                                       <Download className="size-3 mr-1" /> Download
                                     </Button>
                                   </a>
-                                  <Button size="sm" variant="outline"
-                                    className="border-white/20 text-white hover:bg-white/10 h-7 text-xs flex-1"
-                                    onClick={() => navigator.clipboard?.writeText(j.url!)}>
-                                    <Share2 className="size-3 mr-1" /> Copy link
-                                  </Button>
+                                  {j.storagePath && (
+                                    <Button size="sm" variant="outline"
+                                      className="border-white/20 text-white hover:bg-white/10 h-7 text-xs"
+                                      title="Get a shareable cloud link (valid 1 hour)"
+                                      onClick={async () => {
+                                        const url = await getExportSignedUrl(j.storagePath!, 3600);
+                                        if (url) navigator.clipboard?.writeText(url);
+                                      }}>
+                                      <Share2 className="size-3 mr-1" /> Share
+                                    </Button>
+                                  )}
                                 </>
                               ) : isCloud ? (
                                 /* Cloud-stored export — re-generate signed URL */
