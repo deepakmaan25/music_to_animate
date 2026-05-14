@@ -427,9 +427,15 @@ function ProjectCard({ project, isSynced, onOpen, onRename, onDelete }: {
 
       <div className="p-4 sm:p-5">
         <div className="flex items-start gap-3 mb-4">
-          <div className="size-9 sm:size-10 rounded-xl shrink-0 flex items-center justify-center text-white"
+          <div className="size-9 sm:size-10 rounded-xl shrink-0 overflow-hidden relative"
             style={{ background: engine.gradient }}>
-            <Music className="size-4" />
+            {project.style?.thumbnail ? (
+              <img src={project.style.thumbnail} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center">
+                <Music className="size-4 text-white" />
+              </div>
+            )}
           </div>
           <div className="flex-1 min-w-0 pt-0.5">
             {editing ? (
