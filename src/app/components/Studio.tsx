@@ -213,12 +213,18 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const cameraDriftYRef      = useRef(0);
   const smoothedEnergyRef    = useRef(0.5);
   const prevSectionLabelRef  = useRef<string | null>(null);
+  const lastCameraTransformRef = useRef<string>('');
   // Beat onset detection — first-order difference of bass level
   const prevBassRef          = useRef(0);
   // Smoothed burst — decays over ~8 frames so beat effect lasts visibly
   const smoothedBurstRef     = useRef(0);
   // Throttle section label React updates (every ~500ms, not every frame)
   const sectionUpdateThrottle = useRef(0);
+  // FPS tracking
+  const fpsFramesRef         = useRef(0);
+  const fpsLastTimeRef       = useRef(performance.now());
+  const [fps, setFps] = useState(0);
+  const [showFps, setShowFps] = useState(false);
   const audioCtxRef  = useRef<AudioContext | null>(null);
   const analyserRef  = useRef<AnalyserNode | null>(null);
   const gainRef      = useRef<GainNode | null>(null);
@@ -435,13 +441,19 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     // Apply camera ONLY to 3D engines — 2D engines (bars, radial) get no zoom
     const is3DEngine = ['orbital','depth','terrain','tunnel','neon_spheres','fractal','solar'].includes(eng);
     if (cameraWrapperRef.current) {
+      let nextTransform: string;
       if (is3DEngine) {
         const z = cameraZoomRef.current.toFixed(4);
         const dx = (cameraDriftXRef.current * 100).toFixed(3);
         const dy = (cameraDriftYRef.current * 100).toFixed(3);
-        cameraWrapperRef.current.style.transform = `translate(${dx}%, ${dy}%) scale(${z})`;
+        nextTransform = `translate(${dx}%, ${dy}%) scale(${z})`;
       } else {
-        cameraWrapperRef.current.style.transform = 'none';
+        nextTransform = 'none';
+      }
+      // Skip write if unchanged — saves a style-recalc per frame
+      if (nextTransform !== lastCameraTransformRef.current) {
+        cameraWrapperRef.current.style.transform = nextTransform;
+        lastCameraTransformRef.current = nextTransform;
       }
     }
     // ─────────────────────────────────────────────────────────────────────
@@ -456,7 +468,15 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       sectionUpdateThrottle.current = now2;
       setActiveSectionLabel(activeSection?.label ?? null);
       setLiveEnergy(Math.round(currentEnergy * 100));
+      // FPS calculation: frames per second over the throttle window
+      const elapsed = now2 - fpsLastTimeRef.current;
+      if (elapsed > 0) {
+        setFps(Math.round((fpsFramesRef.current / elapsed) * 1000));
+      }
+      fpsFramesRef.current = 0;
+      fpsLastTimeRef.current = now2;
     }
+    fpsFramesRef.current++;
     // ─────────────────────────────────────────────────────────────────────
 
     // ── Spectrum Bars — mirror mode ───────────────────────────────────────
@@ -1030,13 +1050,17 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const baseW = 960;
+    // Base internal resolution — higher = sharper but more CPU per frame
+    // Cap at 720 width to keep RAF cost predictable
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const baseW = perfMode ? 480 : 720;
     const ratio = aspect === '9:16' ? 9 / 16 : aspect === '1:1' ? 1 : 16 / 9;
-    canvas.width  = aspect === '9:16' ? 540 : baseW;
-    canvas.height = Math.round(canvas.width / ratio);
+    const targetW = aspect === '9:16' ? Math.round(baseW * 0.6) : baseW;
+    canvas.width  = Math.round(targetW * dpr);
+    canvas.height = Math.round((targetW / ratio) * dpr);
     drawFrame();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aspect]);
+  }, [aspect, perfMode]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Playback
@@ -1575,10 +1599,26 @@ if (dbExports.length > 0) {
  
         {/* Left: canvas + transport — fixed height on mobile, flex-1 on desktop */}
         <div className="flex flex-col shrink-0 lg:flex-1 p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden
-                        h-[45vw] min-h-[200px] max-h-[340px] lg:h-auto lg:max-h-none">
+                        min-h-[220px] lg:min-h-0 lg:h-auto"
+             style={{
+               // On mobile: portrait aspects get more height, landscape gets less
+               height: typeof window !== 'undefined' && window.innerWidth < 1024
+                 ? (aspect === '9:16' ? 'min(78vh, 520px)' : aspect === '1:1' ? 'min(60vw, 380px)' : 'min(50vw, 340px)')
+                 : undefined,
+             }}>
  
-          {/* Canvas — grows to fill, constrained by aspect ratio */}
-          <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-black border border-white/10">
+          {/* Canvas viewport — auto-adjusts to selected aspect ratio */}
+          <div
+            className="relative mx-auto rounded-xl overflow-hidden bg-black border border-white/10"
+            style={{
+              aspectRatio: aspect === '9:16' ? '9 / 16' : aspect === '1:1' ? '1 / 1' : '16 / 9',
+              width: aspect === '9:16' ? 'auto' : '100%',
+              height: aspect === '9:16' ? '100%' : 'auto',
+              maxHeight: '100%',
+              maxWidth: '100%',
+              flex: '0 1 auto',
+            }}
+          >
             <AnimatePresence>
               {status === 'decoding' && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -1631,6 +1671,15 @@ if (dbExports.length > 0) {
                   'bg-white/10 text-white/50'
                 }`}>{activeSectionLabel}</span>
                 <span className="text-[10px] text-white/30 tabular-nums">{liveEnergy}%</span>
+              </div>
+            )}
+
+            {/* FPS overlay — only when toggled in Motion tab */}
+            {showFps && status === 'ready' && (
+              <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-black/60 pointer-events-none">
+                <span className={`text-[10px] font-bold tabular-nums ${
+                  fps >= 50 ? 'text-emerald-400' : fps >= 30 ? 'text-amber-400' : 'text-red-400'
+                }`}>{fps} fps</span>
               </div>
             )}
           </div>
@@ -1870,6 +1919,13 @@ if (dbExports.length > 0) {
                     <div className="text-[11px] text-gray-400 mt-0.5">Reduces detail for low-power devices.</div>
                   </div>
                   <input type="checkbox" checked={perfMode} onChange={(e) => setPerfMode(e.target.checked)} className="size-4 accent-purple-500" />
+                </label>
+                <label className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10 cursor-pointer">
+                  <div>
+                    <div className="text-xs font-medium">Show FPS counter</div>
+                    <div className="text-[11px] text-gray-400 mt-0.5">Diagnostic overlay. Green = 50+, amber = 30+, red = struggling.</div>
+                  </div>
+                  <input type="checkbox" checked={showFps} onChange={(e) => setShowFps(e.target.checked)} className="size-4 accent-purple-500" />
                 </label>
               </TabsContent>
  
