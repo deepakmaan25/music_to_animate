@@ -188,6 +188,10 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
   const exportCancelRef = useRef(false);  // set true to abort a running export
 
+  // Live section state for React overlay (updated from RAF, not canvas)
+  const [activeSectionLabel, setActiveSectionLabel] = useState<string | null>(null);
+  const [liveEnergy, setLiveEnergy] = useState(0);
+
   // ── Live-param refs (RAF closure safety) ──────────────────────────────────
   const engineRef          = useRef<EngineId>(engine);
   const paletteRef         = useRef(palette);
@@ -213,6 +217,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const prevBassRef          = useRef(0);
   // Smoothed burst — decays over ~8 frames so beat effect lasts visibly
   const smoothedBurstRef     = useRef(0);
+  // Throttle section label React updates (every ~500ms, not every frame)
+  const sectionUpdateThrottle = useRef(0);
   const audioCtxRef  = useRef<AudioContext | null>(null);
   const analyserRef  = useRef<AnalyserNode | null>(null);
   const gainRef      = useRef<GainNode | null>(null);
@@ -443,6 +449,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     // ── Section-reactive colours ──────────────────────────────────────────
     // Boosts saturation at drops, mutes at breakdowns — applied to all engines
     const liveColors = colors.map(c => shiftColorIntensity(c, sectionIntensity)) as [string, string, string];
+
+    // Throttled React state update for the overlay (not every frame)
+    const now2 = Date.now();
+    if (now2 - sectionUpdateThrottle.current > 500) {
+      sectionUpdateThrottle.current = now2;
+      setActiveSectionLabel(activeSection?.label ?? null);
+      setLiveEnergy(Math.round(currentEnergy * 100));
+    }
     // ─────────────────────────────────────────────────────────────────────
 
     // ── Spectrum Bars — mirror mode ───────────────────────────────────────
@@ -1002,29 +1016,12 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
       ctx.fillRect(0, 0, w, h);
     }
-    // Breakdown vignette: subtle darkness at low-energy sections
+    // Breakdown vignette
     if (activeSection && (activeSection.label === 'breakdown')) {
       const vigAlpha = 0.18 * (1 - sectionProgress * 0.5);
       ctx.fillStyle = `rgba(0,0,0,${vigAlpha})`;
       ctx.fillRect(0, 0, w, h);
     }
-
-    // Section label + energy dot (replaces static "Preview" text)
-    ctx.fillStyle = 'rgba(255,255,255,0.32)';
-    ctx.font = '11px system-ui';
-    ctx.textAlign = 'left';
-    const sectionLabel = activeSection
-      ? `${activeSection.label.toUpperCase()} · ${Math.round(currentEnergy * 100)}%`
-      : 'Adaptive quality';
-    ctx.fillText(sectionLabel, 12, 20);
-    // Energy dot
-    const dotColor = sectionIntensity > 0.8 ? '#f59e0b'
-      : sectionIntensity > 0.5 ? '#8b5cf6'
-      : '#4b5563';
-    ctx.fillStyle = dotColor;
-    ctx.beginPath();
-    ctx.arc(ctx.measureText(sectionLabel).width + 20, 15, 4, 0, Math.PI * 2);
-    ctx.fill();
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1623,6 +1620,19 @@ if (dbExports.length > 0) {
                 className="w-full h-full object-contain"
               />
             </div>
+
+            {/* Section label overlay — React layer, NOT recorded into video */}
+            {status === 'ready' && activeSectionLabel && (
+              <div className="absolute top-2 left-2 flex items-center gap-1.5 pointer-events-none">
+                <span className={`text-[10px] font-bold tracking-widest px-2 py-0.5 rounded uppercase ${
+                  activeSectionLabel === 'drop'      ? 'bg-amber-500/25 text-amber-300' :
+                  activeSectionLabel === 'chorus'    ? 'bg-purple-500/25 text-purple-300' :
+                  activeSectionLabel === 'breakdown' ? 'bg-blue-500/20 text-blue-300' :
+                  'bg-white/10 text-white/50'
+                }`}>{activeSectionLabel}</span>
+                <span className="text-[10px] text-white/30 tabular-nums">{liveEnergy}%</span>
+              </div>
+            )}
           </div>
  
           {/* Sign-in nudge — shown once to anonymous users after audio loads */}
@@ -1740,6 +1750,89 @@ if (dbExports.length > 0) {
                   </div>
                 )}
 
+                {/* ── Track analysis info ── */}
+                {trackAnalysis && (
+                  <div className="rounded-xl border border-white/10 bg-white/5 p-3 space-y-2.5">
+                    {/* Stats row */}
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className="text-center">
+                        <div className="text-lg font-bold tabular-nums text-white">{trackAnalysis.bpm}</div>
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider">BPM</div>
+                      </div>
+                      <div className="w-px h-8 bg-white/10" />
+                      <div className="text-center">
+                        <div className="text-sm font-semibold capitalize text-purple-300">{trackAnalysis.mood}</div>
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider">Mood</div>
+                      </div>
+                      <div className="w-px h-8 bg-white/10" />
+                      <div className="text-center">
+                        <div className="text-sm font-semibold text-white">{trackAnalysis.sections.length}</div>
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider">Sections</div>
+                      </div>
+                      <div className="w-px h-8 bg-white/10" />
+                      <div className="text-center">
+                        <div className="text-sm font-semibold text-white">{Math.round(trackAnalysis.avgEnergy * 100)}%</div>
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wider">Energy</div>
+                      </div>
+                    </div>
+
+                    {/* Energy curve mini-visualizer */}
+                    <div>
+                      <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Track intensity</div>
+                      <div className="relative h-8 rounded overflow-hidden bg-black/20">
+                        <svg width="100%" height="100%" viewBox="0 0 300 32" preserveAspectRatio="none"
+                          className="absolute inset-0">
+                          <defs>
+                            <linearGradient id="ec" x1="0" y1="0" x2="1" y2="0">
+                              <stop offset="0%" stopColor="#7C3AED" />
+                              <stop offset="50%" stopColor="#EC4899" />
+                              <stop offset="100%" stopColor="#06B6D4" />
+                            </linearGradient>
+                          </defs>
+                          <polyline
+                            fill="rgba(124,58,237,0.15)"
+                            stroke="url(#ec)"
+                            strokeWidth="1.5"
+                            points={(() => {
+                              const curve = trackAnalysis.energyCurve;
+                              const step = Math.max(1, Math.floor(curve.length / 150));
+                              const pts: string[] = ['0,32'];
+                              for (let i = 0; i < curve.length; i += step) {
+                                const x = (i / curve.length) * 300;
+                                const y = 32 - curve[i] * 28;
+                                pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+                              }
+                              pts.push('300,32');
+                              return pts.join(' ');
+                            })()}
+                          />
+                        </svg>
+                        {/* Section markers */}
+                        {trackAnalysis.sections.map((sec, i) => {
+                          const totalDur = trackAnalysis.sections[trackAnalysis.sections.length - 1].endSec;
+                          const x = (sec.startSec / totalDur) * 100;
+                          const isHighEnergy = sec.label === 'drop' || sec.label === 'chorus';
+                          return (
+                            <div key={i} className="absolute top-0 bottom-0 w-px opacity-60"
+                              style={{
+                                left: `${x}%`,
+                                background: isHighEnergy ? '#f59e0b' : sec.label === 'breakdown' ? '#3b82f6' : 'rgba(255,255,255,0.2)',
+                              }}
+                              title={sec.label}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="flex justify-between mt-1">
+                        <span className="text-[10px] text-gray-600">0:00</span>
+                        <span className="text-[10px] text-gray-600">
+                          {Math.floor(trackAnalysis.sections[trackAnalysis.sections.length - 1]?.endSec / 60)}:
+                          {Math.floor(trackAnalysis.sections[trackAnalysis.sections.length - 1]?.endSec % 60).toString().padStart(2,'0')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {(['2D', '3D'] as const).map((group) => (
                   <div key={group} className="space-y-1.5">
                     <div className="text-[10px] uppercase tracking-wider text-gray-400 flex items-center gap-2 px-1">
@@ -1793,6 +1886,47 @@ if (dbExports.length > 0) {
                     {palette === i && <Check className="size-3.5 text-emerald-400" />}
                   </button>
                 ))}
+
+                {/* Custom palette */}
+                <div className="pt-2 border-t border-white/10 mt-2">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Custom colours</div>
+                  <div className="flex gap-2 items-center">
+                    {([0,1,2] as const).map((slot) => (
+                      <label key={slot} className="flex flex-col items-center gap-1 cursor-pointer">
+                        <div className="size-9 rounded-lg border border-white/20 overflow-hidden relative"
+                          style={{ background: PALETTES[palette].colors[slot] }}>
+                          <input type="color"
+                            value={PALETTES[palette].colors[slot]}
+                            onChange={(e) => {
+                              const newColors = [...PALETTES[palette].colors] as [string,string,string];
+                              newColors[slot] = e.target.value;
+                              // Patch the active palette in-place (mutable for session only)
+                              PALETTES[palette] = { ...PALETTES[palette], colors: newColors };
+                              // Force a re-render
+                              paletteRef.current = palette;
+                              setPalette(palette);
+                            }}
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                          />
+                        </div>
+                        <span className="text-[9px] text-gray-500">{['Low','Mid','High'][slot]}</span>
+                      </label>
+                    ))}
+                    <button onClick={() => {
+                      const defaults: [string,string,string][] = [
+                        ['#8b5cf6','#ec4899','#f59e0b'],
+                        ['#06b6d4','#3b82f6','#8b5cf6'],
+                        ['#10b981','#84cc16','#fbbf24'],
+                        ['#ffffff','#9ca3af','#4b5563'],
+                      ];
+                      PALETTES[palette] = { name: PALETTES[palette].name, colors: defaults[palette % 4] };
+                      setPalette(p => p);
+                    }} className="ml-auto text-[10px] text-gray-500 hover:text-gray-300 underline">
+                      Reset
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-gray-600 mt-2">Click a swatch to pick a custom colour for that slot.</p>
+                </div>
               </TabsContent>
  
               {/* ── Export (settings) ───────────────────────────── */}
@@ -1843,6 +1977,17 @@ if (dbExports.length > 0) {
                   className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:opacity-50">
                   <FileVideo className="size-4 mr-2" /> Start export
                 </Button>
+                {project && status === 'ready' && (
+                  <p className="text-[11px] text-gray-500 text-center">
+                    {(() => {
+                      const dur = clipDuration === 'full' ? Math.min(project.duration, 180) : (clipDuration as number);
+                      const preset = PRESETS.find(p => p.id === presetId);
+                      const lo = preset ? Math.round(dur * preset.w * preset.h * 0.000002) : 0;
+                      const hi = lo * 2;
+                      return `~${Math.ceil(dur)}s to record · approx ${lo}–${hi} MB`;
+                    })()}
+                  </p>
+                )}
                 {exportMode === 'server' && (
                   <p className="text-xs text-amber-400/80">Use Chrome or Firefox on desktop for recording.</p>
                 )}
