@@ -186,6 +186,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [recommendations, setRecommendations] = useState<EngineRecommendation[]>([]);
   const [activeTab, setActiveTab]     = useState<string>('style');
 
+  const exportCancelRef = useRef(false);  // set true to abort a running export
+
   // ── Live-param refs (RAF closure safety) ──────────────────────────────────
   const engineRef          = useRef<EngineId>(engine);
   const paletteRef         = useRef(palette);
@@ -270,7 +272,30 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     if (analyserRef.current) analyserRef.current.smoothingTimeConstant = smoothing;
   }, [smoothing]);
 
-  // ── Persist setting changes ────────────────────────────────────────────────
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Don't fire if user is typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === ' ' || e.key === 'k') {
+        e.preventDefault();
+        if (status === 'ready') playing ? pause() : play();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        seek(Math.max(0, currentTime - 5));
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (project) seek(Math.min(project.duration, currentTime + 5));
+      } else if (e.key === 'Escape') {
+        onBack();
+      } else if (e.key === 'm') {
+        // Cycle through palettes
+        setPalette((p) => (p + 1) % PALETTES.length);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [status, playing, currentTime, project]);
   useEffect(() => {
     if (!persist || !persistedId) return;
     persist.updateProject(persistedId, {
@@ -847,7 +872,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       solarTRef.current += (0.008 + energy * 0.04 * sens) * energyMult;
       const cx = w / 2, cy = h / 2;
       const zoom = Math.min(1.22, 1 + bass * sens * 0.35 * sectionIntensity);
-      const segs = 8;
+      // Segment count scales with section — 6 at breakdown, up to 12 at drop
+      const segs = perf ? 6 : Math.round(6 + sectionIntensity * 6);
       ctx.save();
       ctx.translate(cx, cy);
       ctx.scale(zoom, zoom);
@@ -860,21 +886,20 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const c = liveColors[seg % liveColors.length];
         ctx.strokeStyle = c;
         ctx.shadowColor = c;
-        ctx.shadowBlur  = 4 + highs * 14;
+        ctx.shadowBlur  = (4 + highs * 14) * (0.5 + sectionIntensity * 0.5);
         ctx.lineWidth   = 1 + bass * 3 * sens;
-        ctx.globalAlpha = 0.6 + mids * 0.4;
+        ctx.globalAlpha = 0.5 + mids * 0.5;
         ctx.beginPath();
         let first = true;
         for (let b = 0; b < bars; b++) {
           const v = (freq[b * step] / 255) * sens;
           const angle = (b / bars) * Math.PI * 0.45 - 0.225;
-          const r2    = Math.min(w, h) * 0.04 + v * Math.min(w, h) * 0.3 * (1 + mids * 0.6);
+          const r2    = Math.min(w, h) * 0.04 + v * Math.min(w, h) * 0.3 * (1 + mids * 0.6) * (0.6 + sectionIntensity * 0.4);
           const r1    = Math.min(w, h) * 0.04;
           if (first) { ctx.moveTo(Math.cos(angle) * r1, Math.sin(angle) * r1); first = false; }
           ctx.lineTo(Math.cos(angle) * r2, Math.sin(angle) * r2);
         }
         ctx.stroke();
-        // Inner accent arc
         ctx.globalAlpha = 0.2 + bass * 0.4;
         ctx.beginPath();
         ctx.arc(0, 0, Math.min(w, h) * 0.04 * (1 + bass * 0.5), -0.225, 0.225);
@@ -889,7 +914,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = 'rgba(1,1,8,0.28)';
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
-      solarTRef.current += (0.006 + bass * 0.012 * sens) * energyMult;
+      // Orbit speed scales with section — crawl at breakdown, surge at drop
+      solarTRef.current += (0.004 + bass * 0.012 * sens) * energyMult * (0.4 + sectionIntensity * 0.6);
       const cx = w / 2, cy = h / 2;
       const minDim = Math.min(w, h);
       if (planetsRef.current.length < 5) {
@@ -901,10 +927,10 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           { angle: 3.9, speed: 0.002, dist: 0.42, size: 0.019, color: 1 },
         ];
       }
-      // Sun
-      const sunR = minDim * 0.055 * (1 + bass * sens * 0.55);
+      // Sun — larger and brighter at high-energy sections
+      const sunR = minDim * 0.055 * (1 + bass * sens * 0.55) * (0.75 + sectionIntensity * 0.25);
       ctx.save();
-      ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 50 + bass * 80 * sens;
+      ctx.shadowColor = liveColors[0]; ctx.shadowBlur = (50 + bass * 80 * sens) * (0.5 + sectionIntensity * 0.5);
       const sunG = ctx.createRadialGradient(cx, cy, 0, cx, cy, sunR * 3.5);
       sunG.addColorStop(0, '#ffffff');
       sunG.addColorStop(0.15, liveColors[0]);
@@ -1048,6 +1074,18 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       analyser.connect(gain).connect(ctx.destination);
       const newProj: Project = { id: `prj_${Date.now()}`, fileName: file.name, duration: audioBuffer.duration, audioBuffer, engine: initialEngine };
       setProject(newProj); setStatus('ready');
+
+      // Capture thumbnail after first frame renders (~300ms)
+      setTimeout(() => {
+        if (canvasRef.current) {
+          try {
+            const thumb = canvasRef.current.toDataURL('image/jpeg', 0.55);
+            if (persist && persistedId) {
+              persist.updateProject(persistedId, { style: { ...(persist.projects[persistedId]?.style ?? {}), thumbnail: thumb } });
+            }
+          } catch { /* cross-origin canvas — skip silently */ }
+        }
+      }, 350);
 
       // ── Phase 9: offline analysis — Web Worker with main-thread fallback ──
       (() => {
@@ -1396,7 +1434,15 @@ if (dbExports.length > 0) {
       try { src.stop(); } catch {}
       playingRef.current = false; setPlaying(false);
     };
+       exportCancelRef.current = false; // reset before starting
        recorder.onstop = () => {
+      // If cancelled, discard blob and mark as error
+      if (exportCancelRef.current) {
+        setExports((x) => x.filter((j) => j.id !== job.id));
+        exportCancelRef.current = false;
+        return;
+      }
+
       const ext  = exportMode === 'mp4' ? 'mp4' : 'webm';
       const type = exportMode === 'mp4' ? 'video/mp4' : 'video/webm';
       const blob = new Blob(chunks, { type });
@@ -1426,7 +1472,7 @@ if (dbExports.length > 0) {
             resolution: preset ? `${preset.w}x${preset.h}` : '',
             qualityPreset: preset?.name ?? presetId,
             durationSecs: clipDuration === 'full' ? Math.min(project?.duration ?? 0, 180) : (clipDuration as number),
-            blob,          // will be uploaded to Storage in background
+            blob,
             sizeBytes: blob.size,
           })
           .catch((err) => console.warn('[studio] export save failed silently:', err));
@@ -1606,6 +1652,7 @@ if (dbExports.length > 0) {
           <div className="shrink-0 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5">
             <div className="flex items-center gap-3">
               <Button size="icon" disabled={!project} onClick={() => (playing ? pause() : play())}
+                title="Play / Pause  (Space or K)"
                 className="rounded-full size-9 bg-white text-gray-900 hover:bg-gray-100 disabled:opacity-40 shrink-0">
                 {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
               </Button>
@@ -1613,6 +1660,7 @@ if (dbExports.length > 0) {
                 {fmt(currentTime)} / {fmt(project?.duration ?? 0)}
               </div>
               <div className="flex-1 relative h-7 cursor-pointer"
+                title="Seek  (← → arrow keys)"
                 onClick={(e) => {
                   if (!project) return;
                   const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
@@ -1843,6 +1891,16 @@ if (dbExports.length > 0) {
                             <div className="h-1 bg-white/10 rounded-full overflow-hidden mb-2">
                               <div className="h-full bg-gradient-to-r from-purple-400 to-pink-400 transition-all" style={{ width: `${j.progress}%` }} />
                             </div>
+                          )}
+                          {(j.status === 'recording' || j.status === 'finalizing') && (
+                            <Button size="sm" variant="outline"
+                              className="w-full h-7 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10 mb-2"
+                              onClick={() => {
+                                exportCancelRef.current = true;
+                                recorderRef.current?.stop();
+                              }}>
+                              Cancel export
+                            </Button>
                           )}
                           {j.status === 'error' && j.errorMsg && (
                             <div className="text-[11px] text-red-400 flex items-center gap-1 mb-2">
