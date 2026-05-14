@@ -169,8 +169,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [particleDensity, setParticleDensity] = useState(stored?.motion.particleDensity ?? 0.6);
   const [smoothing, setSmoothing]             = useState(stored?.motion.smoothing ?? 0.8);
   const [perfMode, setPerfMode]               = useState(false);
-  const [baseSpeed, setBaseSpeed]             = useState(0.35);
-  const [beatResponse, setBeatResponse]       = useState(0.7);
+  const [baseSpeed, setBaseSpeed]             = useState(0.15);   // gentle cruise by default
+  const [beatResponse, setBeatResponse]       = useState(0.55);   // noticeable but not chaotic
 
   const [playing, setPlaying]       = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -209,6 +209,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const prevSectionLabelRef  = useRef<string | null>(null);
   // Beat onset detection — first-order difference of bass level
   const prevBassRef          = useRef(0);
+  // Smoothed burst — decays over ~8 frames so beat effect lasts visibly
+  const smoothedBurstRef     = useRef(0);
   const audioCtxRef  = useRef<AudioContext | null>(null);
   const analyserRef  = useRef<AnalyserNode | null>(null);
   const gainRef      = useRef<GainNode | null>(null);
@@ -501,7 +503,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const rot = cameraTRef.current * (0.3 + r * 0.1) + r;
         ctx.save();
         ctx.translate(cx, cy); ctx.rotate(rot); ctx.scale(1, Math.max(0.15, tilt - r * 0.03));
-        ctx.strokeStyle = liveColors[r % colors.length];
+        ctx.strokeStyle = liveColors[r % liveColors.length];
         ctx.globalAlpha = 0.55 + mids * 0.5;
         ctx.lineWidth = thickness;
         ctx.beginPath(); ctx.arc(0, 0, baseR, 0, Math.PI * 2); ctx.stroke();
@@ -522,81 +524,122 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.globalAlpha = 1;
       sparksRef.current = sparksRef.current.filter((s) => s.life > 0.08);
 
-    // ── Depth Field Particles — proper starfield with beat onset ─────────
+    // ── Depth Field Particles — cinematic starfield ───────────────────────
     } else if (eng === 'depth') {
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
 
-      // Beat ONSET: react only to rising edges, not sustained bass
+      // Beat onset: rising edge only
       const bassOnset = Math.max(0, bass - prevBassRef.current);
       prevBassRef.current = bass;
-      const isBeat = bassOnset > 0.055;
-      const beatStrength = isBeat ? bassOnset : 0;
+      const isBeat = bassOnset > 0.048;
 
-      // Trail fade — shorter = snappier, longer = dreamy
-      const trail = 0.10 + (1 - bResp) * 0.14;
+      // Smooth burst persists ~8 frames so each beat is visibly felt
+      if (isBeat) smoothedBurstRef.current = Math.min(1, smoothedBurstRef.current + bassOnset * 2.2);
+      smoothedBurstRef.current *= 0.82; // decay per frame
+      const burst = smoothedBurstRef.current;
+
+      // Trail fade: controlled by beat responsiveness
+      // Low bResp → longer dreamy trails; high bResp → snappy short trails
+      const trail = 0.08 + (1 - bResp) * 0.16;
       ctx.fillStyle = `rgba(2,2,8,${trail})`;
       ctx.fillRect(0, 0, w, h);
 
-      // Section-aware particle count
-      const densityScale = 0.4 + sectionIntensity * 0.6;
-      const targetCount = Math.floor((perf ? 400 : 1000) * densityScale * (0.4 + particleDensityRef.current * 0.6));
+      // Particle count: section + density slider
+      const densityScale = 0.5 + sectionIntensity * 0.5;
+      const targetCount = Math.floor((perf ? 350 : 900) * densityScale * (0.35 + particleDensRef.current * 0.65));
       while (starsRef.current.length < targetCount) {
-        starsRef.current.push({ x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2, z: 0.2 + Math.random() * 0.8, hue: Math.random() });
+        starsRef.current.push({
+          x: (Math.random() - 0.5) * 2,
+          y: (Math.random() - 0.5) * 2,
+          z: 0.15 + Math.random() * 0.85,
+          hue: Math.random(),
+        });
       }
-      starsRef.current.length = Math.min(starsRef.current.length, targetCount + 50);
+      starsRef.current.length = Math.min(starsRef.current.length, targetCount + 60);
 
-      // Base speed: very slow — beat burst adds the excitement
-      const baseSpd = 0.0003 + bSpeed * 0.0015;
-      const beatBurst = beatStrength * bResp * 0.08 * sens;
-      const speed = (baseSpd + beatBurst) * energyMult;
+      // Speed: gentle base drift + burst spike on beat
+      // bSpeed controls cruise; bResp controls how dramatic the beat surge is
+      const baseSpd = 0.00025 + bSpeed * 0.0012;
+      const beatSpike = burst * bResp * 0.10 * sens;
+      const speed = (baseSpd + beatSpike) * energyMult;
 
       const cx = w / 2, cy = h / 2;
-      const focal = Math.min(w, h) * 0.65;
+      const focal = Math.min(w, h) * 0.68;
 
       for (const s of starsRef.current) {
         const prevZ = s.z;
         s.z -= speed;
-        if (s.z <= 0.004) {
-          s.x = (Math.random() - 0.5) * 2; s.y = (Math.random() - 0.5) * 2;
-          s.z = 0.85 + Math.random() * 0.15; s.hue = Math.random();
+
+        if (s.z <= 0.003) {
+          // Respawn at the far end of the tunnel
+          s.x = (Math.random() - 0.5) * 2;
+          s.y = (Math.random() - 0.5) * 2;
+          s.z = 0.88 + Math.random() * 0.12;
+          s.hue = Math.random();
           continue;
         }
+
         const sx = cx + (s.x / s.z) * focal;
         const sy = cy + (s.y / s.z) * focal;
-        if (sx < -30 || sx > w + 30 || sy < -30 || sy > h + 30) continue;
+        if (sx < -40 || sx > w + 40 || sy < -40 || sy > h + 40) continue;
 
-        // Quadratic depth: tiny far stars, large close ones — makes depth VISIBLE
-        const proximity = 1 - s.z;
-        const size = Math.max(0.3, proximity * proximity * (5 + mids * 7 * sens));
-        const alpha = Math.min(1, proximity * 2.0) * (0.4 + highs * 0.6);
+        // Quadratic proximity makes depth physically clear
+        const proximity = 1 - s.z; // 0=far, 1=close
+        const proxSq = proximity * proximity;
+
+        // Size: tiny stars far away, large glowing ones close
+        const size = Math.max(0.25, proxSq * (4.5 + mids * 8 * sens));
+
+        // Alpha: close stars bright, far ones dim
+        const alpha = Math.min(1, proximity * 1.8) * (0.35 + highs * 0.65);
         const color = liveColors[Math.floor(s.hue * liveColors.length)] || liveColors[0];
 
         ctx.globalAlpha = alpha;
 
-        // Star trail on beat burst — warp-speed effect on the beat
-        if (beatBurst > 0.01 && prevZ > 0) {
+        // Warp trail: draw line from previous position on beat burst
+        if (burst > 0.05 && prevZ > 0) {
           const prevSx = cx + (s.x / prevZ) * focal;
           const prevSy = cy + (s.y / prevZ) * focal;
-          const trailDist = Math.hypot(sx - prevSx, sy - prevSy);
-          if (trailDist > 1.5 && trailDist < 80) {
+          const trailLen = Math.hypot(sx - prevSx, sy - prevSy);
+          if (trailLen > 1.2 && trailLen < 100) {
             ctx.strokeStyle = color;
-            ctx.lineWidth = Math.max(0.5, size * 0.5);
+            ctx.lineWidth = Math.max(0.4, size * 0.45);
             ctx.lineCap = 'round';
-            ctx.beginPath(); ctx.moveTo(prevSx, prevSy); ctx.lineTo(sx, sy); ctx.stroke();
+            ctx.globalAlpha = alpha * Math.min(1, burst * 1.5);
+            ctx.beginPath();
+            ctx.moveTo(prevSx, prevSy);
+            ctx.lineTo(sx, sy);
+            ctx.stroke();
+            ctx.globalAlpha = alpha;
           }
         }
 
+        // Glow halo on close stars (proximity > 0.6)
+        if (proximity > 0.6 && size > 1.5) {
+          ctx.shadowColor = color;
+          ctx.shadowBlur = size * 3;
+        }
+
         ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath();
+        ctx.arc(sx, sy, size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
       }
       ctx.globalAlpha = 1;
 
-      // Shockwave ring — ONLY on strong beat onset, not sustained bass
-      if (isBeat && beatStrength > 0.08) {
-        ctx.strokeStyle = liveColors[1];
-        ctx.lineWidth = 1.5 + beatStrength * 3;
-        ctx.globalAlpha = Math.min(0.7, beatStrength * 2.5);
-        ctx.beginPath(); ctx.arc(cx, cy, Math.min(w, h) * (0.06 + beatStrength * 0.28), 0, Math.PI * 2); ctx.stroke();
+      // Shockwave ring on strong beat onset — tight, bright, fast
+      if (isBeat && bassOnset > 0.07) {
+        const ringR = Math.min(w, h) * (0.05 + bassOnset * 0.22);
+        ctx.strokeStyle = liveColors[0];
+        ctx.lineWidth = 2 + bassOnset * 4;
+        ctx.globalAlpha = Math.min(0.85, bassOnset * 3);
+        ctx.shadowColor = liveColors[0];
+        ctx.shadowBlur = 18;
+        ctx.beginPath();
+        ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
         ctx.globalAlpha = 1;
       }
 
@@ -621,7 +664,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const scale  = Math.pow(t, 1.3);
         const fogFactor = Math.max(0, 1 - t * 2.2);
         const alpha = (0.1 + scale * 0.8) * (1 - fogFactor * 0.75);
-        ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % colors.length])}, ${alpha})`;
+        ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % liveColors.length])}, ${alpha})`;
         ctx.lineWidth = 0.5 + scale * 1.8;
         ctx.beginPath();
         for (let c = 0; c <= cols; c++) {
@@ -663,7 +706,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.save();
         ctx.translate(cx, cy);
         ctx.rotate(roll * (1 - z));
-        const c = liveColors[i % colors.length];
+        const c = liveColors[i % liveColors.length];
         const bright = 0.3 + mids * 0.9 * sens; // mids drive brightness
         ctx.globalAlpha = Math.min(1, alpha * bright);
         ctx.shadowColor = c;
@@ -724,7 +767,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const sx = sp.x * w, sy = sp.y * h;
         const minDim = Math.min(w, h);
         const r = sp.size * minDim * (1 + be * sens * 1.8) * (1 + bass * 0.25);
-        const color = liveColors[i % colors.length];
+        const color = liveColors[i % liveColors.length];
         ctx.save();
         ctx.shadowColor = color;
         ctx.shadowBlur  = 20 + be * 55 * sens;
@@ -763,7 +806,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         if (seg % 2 === 1) ctx.scale(-1, 1);
         const bars = 28;
         const step = Math.floor(freq.length / bars);
-        const c = liveColors[seg % colors.length];
+        const c = liveColors[seg % liveColors.length];
         ctx.strokeStyle = c;
         ctx.shadowColor = c;
         ctx.shadowBlur  = 4 + highs * 14;
@@ -848,7 +891,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const px = cx + Math.cos(p.angle) * orbitR;
         const py = cy + Math.sin(p.angle) * orbitR;
         const pSize  = p.size * minDim * (1 + bv * sens * 0.9);
-        const pColor = liveColors[p.color % colors.length];
+        const pColor = liveColors[p.color % liveColors.length];
         ctx.save();
         ctx.shadowColor = pColor; ctx.shadowBlur = 8 + bv * 18;
         const pG = ctx.createRadialGradient(px, py, 0, px, py, pSize * 2.2);
@@ -1622,7 +1665,9 @@ if (dbExports.length > 0) {
                   <div className="space-y-4 border-t border-white/10 pt-4">
                     <div className="text-[10px] uppercase tracking-wider text-purple-300">Depth Field</div>
                     <Slider label="Base travel speed" value={baseSpeed} onChange={setBaseSpeed} min={0} max={1} step={0.01} />
+                    <p className="text-[11px] text-gray-500 -mt-3">Low = dreamy drift. High = constant rush.</p>
                     <Slider label="Beat responsiveness" value={beatResponse} onChange={setBeatResponse} min={0} max={1} step={0.01} />
+                    <p className="text-[11px] text-gray-500 -mt-3">Controls warp surge on each beat. Sweet spot: 40–65%.</p>
                   </div>
                 )}
                 <label className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10 cursor-pointer">
