@@ -24,12 +24,12 @@ const ENGINES: {
   { id: 'radial_spectrum', studio: 'radial', previewStyle: 'radial', name: 'Radial Spectrum', icon: <Layers className="size-4" />, description: 'Circular frequency visualization with dynamic color shifts.', moods: ['High-Energy', 'Futuristic'], gradient: 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)' },
   { id: 'depth_field', studio: 'depth', previewStyle: 'particles', name: 'Depth Field', icon: <Sparkles className="size-4" />, description: 'Cinematic starfield that surges on every beat.', moods: ['Dreamy', 'Chill'], gradient: 'linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%)' },
   { id: 'geometric_pulse', studio: 'bars', previewStyle: 'bars', name: 'Geometric Pulse', icon: <Zap className="size-4" />, description: 'Bold spectrum bars morphing with bass and rhythm.', moods: ['Aggressive', 'High-Energy'], gradient: 'linear-gradient(135deg, #f97316 0%, #ef4444 100%)' },
-  { id: 'neon_tunnel', studio: 'tunnel', previewStyle: 'tunnel', name: 'Neon Tunnel', icon: <Wand2 className="size-4" />, description: 'Glowing hexagonal tunnel pulsing with bass.', moods: ['Futuristic', 'High-Energy'], gradient: 'linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%)' },
+  { id: 'neon_tunnel',    studio: 'tunnel',      previewStyle: 'tunnel',    name: 'Liquid Aurora',    icon: <Wand2 className="size-4" />,   description: 'Flowing aurora ribbons that ripple with every frequency.', moods: ['Dreamy', 'Cinematic'],     gradient: 'linear-gradient(135deg, #06b6d4 0%, #a855f7 100%)' },
   { id: 'audio_terrain', studio: 'terrain', previewStyle: 'terrain', name: 'Audio Terrain', icon: <Music2 className="size-4" />, description: 'Wireframe landscape that rises with your track.', moods: ['Cinematic', 'Instrumental'], gradient: 'linear-gradient(135deg, #10b981 0%, #06b6d4 100%)' },
   { id: 'orbital_rings', studio: 'orbital', previewStyle: 'rings', name: 'Orbital Rings', icon: <Layers className="size-4" />, description: 'Concentric rings tilt and pulse around a neon core.', moods: ['Dreamy', 'Futuristic'], gradient: 'linear-gradient(135deg, #a855f7 0%, #3b82f6 100%)' },
   { id: 'neon_spheres', studio: 'neon_spheres', previewStyle: 'spheres', name: 'Neon Spheres', icon: <Sparkles className="size-4" />, description: 'Glowing spheres wobbling with each frequency band.', moods: ['Dreamy', 'Vocal-Heavy'], gradient: 'linear-gradient(135deg, #ec4899 0%, #f59e0b 100%)' },
   { id: 'fractal_kaleido', studio: 'fractal', previewStyle: 'fractal', name: 'Kaleidoscope', icon: <Palette className="size-4" />, description: 'Mirrored fractal patterns synced to music energy.', moods: ['Trippy', 'Instrumental'], gradient: 'linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%)' },
-  { id: 'solar_system', studio: 'solar', previewStyle: 'solar', name: 'Solar System', icon: <Zap className="size-4" />, description: 'Central sun with orbiting planets; flares on bass.', moods: ['Cinematic', 'Futuristic'], gradient: 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)' },
+  { id: 'solar_system',   studio: 'solar',       previewStyle: 'solar',     name: 'Geometric Pulse',  icon: <Zap className="size-4" />,     description: 'Concentric beat-rings expand and shatter on every drop.', moods: ['High-Energy', 'Aggressive'], gradient: 'linear-gradient(135deg, #f59e0b 0%, #ec4899 100%)' },
 ];
 
 const PROJECTS_PER_PAGE = 6;
@@ -134,8 +134,15 @@ function LandingApp() {
         style={{ background: 'var(--nav-bg)', borderColor: 'var(--surface-glass-border)' }}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-full flex items-center justify-between">
           <a href="/" className="flex items-center gap-2.5 select-none">
-            <div className="size-7 rounded-lg shrink-0" style={{ background: 'var(--hero-cta-gradient)' }} />
-            <span className="font-semibold tracking-tight text-sm" style={{ color: 'var(--text-strong)' }}>Visualizer</span>
+            {/* Brand icon — purple/pink gradient with waveform bars */}
+            <div className="size-7 rounded-lg shrink-0 flex items-end justify-center gap-[2px] px-1 pb-1"
+              style={{ background: 'var(--hero-cta-gradient)' }}>
+              <span className="w-[3px] rounded-sm bg-white/90" style={{ height: '45%' }} />
+              <span className="w-[3px] rounded-sm bg-white"    style={{ height: '80%' }} />
+              <span className="w-[3px] rounded-sm bg-white"    style={{ height: '100%' }} />
+              <span className="w-[3px] rounded-sm bg-white/90" style={{ height: '60%' }} />
+            </div>
+            <span className="font-semibold tracking-tight text-sm" style={{ color: 'var(--text-strong)' }}>Music Animate</span>
             <span className="hidden sm:inline text-[10px] font-medium px-1.5 py-0.5 rounded-md uppercase tracking-widest border"
               style={{ background: 'var(--surface-glass)', borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}>
               Beta
@@ -145,22 +152,28 @@ function LandingApp() {
           <div className="flex items-center gap-2">
             {user ? (
               <>
+                {/* Avatar — neutral, no gradient, subtle identity marker */}
                 <button
                   onClick={() => document.getElementById('projects-section')?.scrollIntoView({ behavior: 'smooth' })}
                   title={user.email ?? 'My projects'}
-                  className="size-8 rounded-full text-xs font-bold text-white flex items-center justify-center shrink-0"
-                  style={{ background: 'var(--hero-cta-gradient)' }}>
+                  className="size-8 rounded-full text-xs font-bold flex items-center justify-center shrink-0 border"
+                  style={{
+                    background: 'var(--surface-glass)',
+                    borderColor: 'var(--surface-glass-border)',
+                    color: 'var(--text-strong)',
+                  }}>
                   {(user.email ?? 'U')[0].toUpperCase()}
                 </button>
+                {/* Sign out — ghost text, lowest visual weight */}
                 <button onClick={handleSignOut} disabled={signingOut}
-                  className="hidden sm:flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium border transition-all disabled:opacity-50"
-                  style={{ background: 'var(--surface-glass)', borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}>
+                  className="hidden sm:flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium transition-all disabled:opacity-50 hover:opacity-70"
+                  style={{ color: 'var(--text-muted)' }}>
                   {signingOut ? <Loader2 className="size-3.5 animate-spin" /> : <LogOut className="size-3.5" />}
                   {signingOut ? 'Signing out…' : 'Sign out'}
                 </button>
                 <button onClick={handleSignOut} disabled={signingOut}
-                  className="flex sm:hidden size-8 rounded-lg border items-center justify-center disabled:opacity-50"
-                  style={{ background: 'var(--surface-glass)', borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}>
+                  className="flex sm:hidden size-8 rounded-lg items-center justify-center disabled:opacity-50 hover:opacity-70"
+                  style={{ color: 'var(--text-muted)' }}>
                   {signingOut ? <Loader2 className="size-3.5 animate-spin" /> : <LogOut className="size-3.5" />}
                 </button>
               </>
@@ -171,9 +184,14 @@ function LandingApp() {
                 Sign in
               </button>
             )}
+            {/* New project — secondary style, outline with brand colour, NOT full gradient */}
             <button onClick={() => openPicker()}
-              className="h-8 px-3 rounded-lg text-xs font-semibold text-white flex items-center gap-1.5"
-              style={{ background: 'var(--hero-cta-gradient)' }}>
+              className="h-8 px-3 rounded-lg text-xs font-semibold flex items-center gap-1.5 border transition-all hover:opacity-90"
+              style={{
+                background: 'var(--btn-secondary-bg)',
+                borderColor: 'var(--btn-secondary-border)',
+                color: 'var(--btn-secondary-text)',
+              }}>
               <Upload className="size-3.5" />
               <span className="hidden sm:inline">New project</span>
               <span className="sm:hidden">New</span>
@@ -496,10 +514,14 @@ function ProjectCard({ project, isSynced, onOpen, onRename, onDelete }: {
           )}
         </div>
 
-        {/* Primary action */}
+        {/* Primary action — secondary style, not full gradient */}
         <button onClick={onOpen}
-          className="w-full h-9 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-opacity hover:opacity-90 active:opacity-80"
-          style={{ background: 'var(--hero-cta-gradient)' }}>
+          className="w-full h-9 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all hover:opacity-90 active:opacity-80 border"
+          style={{
+            background: 'var(--btn-secondary-bg)',
+            borderColor: 'var(--btn-secondary-border)',
+            color: 'var(--btn-secondary-text)',
+          }}>
           <ExternalLink className="size-3.5" /> Open project
         </button>
       </div>
