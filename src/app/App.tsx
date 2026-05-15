@@ -9,6 +9,7 @@ import { Button } from './components/ui/button';
 import { Studio } from './components/Studio';
 import { AuthModal } from './components/AuthModal';
 import { AuthCallback } from './components/AuthCallback';
+import { SharePage } from './components/SharePage';
 import { useTheme } from './hooks/useTheme';
 import { usePersistentProjects, type StoredProject } from './hooks/usePersistentProjects';
 import { useAuth } from './hooks/useAuth';
@@ -36,6 +37,7 @@ const PROJECTS_PER_PAGE = 6;
 
 export default function App() {
   if (typeof window !== 'undefined' && window.location.pathname === '/auth/callback') return <AuthCallback />;
+  if (typeof window !== 'undefined' && window.location.pathname === '/share') return <SharePage />;
   return <LandingApp />;
 }
 
