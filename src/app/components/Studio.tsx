@@ -2678,29 +2678,38 @@ if (dbExports.length > 0) {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button variant="outline" onClick={onPickFile} className="border-white/20 text-white hover:bg-white/10 shrink-0 h-8 text-xs">
-            <Upload className="size-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Replace track</span>
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <Button variant="outline" onClick={onPickFile}
+            className="border-white/20 text-white hover:bg-white/10 shrink-0 h-8 w-8 sm:w-auto sm:px-3 text-xs p-0 sm:p-auto">
+            <Upload className="size-3.5 sm:mr-1.5" />
+            <span className="hidden sm:inline">Replace</span>
           </Button>
-          <Button variant="ghost" onClick={toggleFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          <Button variant="ghost" onClick={toggleFullscreen}
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen (F)'}
             className="border border-white/15 text-gray-300 hover:bg-white/10 shrink-0 h-8 w-8 p-0">
             {isFullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
           </Button>
         </div>
       </div>
  
-      {/* ── Main content (fills remaining viewport) ─────────────── */}
-      {/* empty */}
-      <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-y-auto lg:overflow-hidden">
+      {/* ── Main content: two fixed zones on mobile — canvas (fixed) + controls (scrollable) ── */}
+      <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
  
-        {/* Left: canvas + transport — fixed height on mobile, flex-1 on desktop */}
-        <div className={`flex flex-col shrink-0 lg:flex-1 p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden
-                        min-h-[180px] lg:min-h-0 lg:h-auto ${isFullscreen ? 'flex-1 !p-0 !gap-0' : ''}`}
+        {/* Canvas + transport — FIXED height on mobile so controls below can scroll freely */}
+        <div className={`flex flex-col shrink-0 lg:flex-1 lg:min-h-0 lg:h-auto
+                        ${isFullscreen ? 'flex-1 !p-0 !gap-0' : 'p-2 sm:p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden'}`}
              style={{
-               // Mobile: 9:16 gets a compact preview — tall enough to see, short enough to leave room for tabs
-               height: isFullscreen ? '100%' : (typeof window !== 'undefined' && window.innerWidth < 1024
-                 ? (aspect === '9:16' ? 'min(50vh, 340px)' : aspect === '1:1' ? 'min(60vw, 340px)' : 'min(46vw, 300px)')
-                 : undefined),
+               height: isFullscreen ? '100%' : (
+                 // Desktop: no inline height — CSS flex handles it
+                 typeof window !== 'undefined' && window.innerWidth >= 1024 ? undefined :
+                 // Mobile fixed heights — INCREASED per request
+                 // 9:16  +40% over old min(50vh,340px) → min(70vh, 476px)
+                 // 1:1   ×2   over old min(60vw,340px) → min(100vw, 520px) — square fills width
+                 // 16:9  ×2   over old min(46vw,300px) → min(92vw, 600px)
+                 aspect === '9:16' ? 'min(70vh, 476px)'
+                 : aspect === '1:1' ? 'min(100vw, 520px)'
+                 : 'min(92vw, 560px)'
+               ),
              }}>
  
           {/* Canvas viewport — auto-adjusts to selected aspect ratio */}
@@ -2959,11 +2968,11 @@ if (dbExports.length > 0) {
           </div>}{/* end transport bar */}
         </div>
  
-        {/* Right: tabbed control panel — full natural height on mobile (page scrolls), fixed panel on desktop */}
+        {/* Controls panel — scrollable on mobile (sits below fixed canvas), fixed sidebar on desktop */}
         {!isFullscreen && (
-        <div className="shrink-0 w-full border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col
-                        lg:flex-none lg:min-h-0 lg:overflow-hidden lg:w-[340px] xl:w-[360px]">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col lg:h-full">
+        <div className="flex-1 min-h-0 overflow-y-auto border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col
+                        lg:overflow-hidden lg:flex-none lg:w-[340px] xl:w-[360px]">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
             <TabsList className="grid grid-cols-5 w-full bg-white/5 rounded-none border-b border-white/10 shrink-0 h-10
                                   sticky top-0 z-10 lg:relative lg:top-auto backdrop-blur-sm">
               <TabsTrigger value="style"   className="text-[10px] sm:text-xs">Style</TabsTrigger>
@@ -2988,8 +2997,8 @@ if (dbExports.length > 0) {
               </div>
             )}
  
-            {/* Each tab content is scrollable on desktop; on mobile the page itself scrolls */}
-            <div className="lg:flex-1 lg:overflow-y-auto">
+            {/* Tab content scroll container */}
+            <div className="flex-1 overflow-y-auto min-h-0">
  
               {/* ── Style ───────────────────────────────────────── */}
               <TabsContent value="style" className="p-4 space-y-4 mt-0">
