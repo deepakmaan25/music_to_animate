@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Play, Pause, Upload, Download, ArrowLeft, RotateCw, FileVideo, Check,
-        Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff, Cloud, X, Trash2 } from 'lucide-react';
+        Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff, Cloud, X, Trash2,
+        Maximize2, Minimize2, Zap } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
@@ -101,6 +102,7 @@ const VARIANTS: Partial<Record<EngineId, { id: string; label: string; descriptio
     { id: 'spokes',  label: 'Spokes',   description: 'Bars radiate outward (default)' },
     { id: 'ring',    label: 'Ring',     description: 'Thick pulsing ring around the core' },
     { id: 'burst',   label: 'Burst',    description: 'Petal explosion on every beat' },
+    { id: 'dots',    label: 'Dots',     description: 'Frequency dots orbiting a pulsing core' },
   ],
   depth: [
     { id: 'starfield', label: 'Starfield', description: 'Flying through a star tunnel (default)' },
@@ -112,6 +114,7 @@ const VARIANTS: Partial<Record<EngineId, { id: string; label: string; descriptio
     { id: 'rings', label: 'Rings', description: 'Tilting concentric rings (default)' },
     { id: 'helix', label: 'Helix', description: 'Stacked rings twist into a DNA double helix' },
     { id: 'web',   label: 'Web',   description: 'Rings laced with radial spokes — spins on every beat' },
+    { id: 'pulse', label: 'Pulse', description: 'Rings shockwave-burst outward from core on every beat' },
   ],
   tunnel: [
     { id: 'aurora',   label: 'Aurora',   description: 'Layered horizontal ribbon curtains (default)' },
@@ -239,6 +242,10 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [recommendations, setRecommendations] = useState<EngineRecommendation[]>([]);
   const [activeTab, setActiveTab]     = useState<string>('style');
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  // Crossfade: when engine changes, briefly overlay the previous frame at alpha→0
+  const crossfadeRef     = useRef<ImageData | null>(null);
+  const crossfadeAlpha   = useRef(0);   // 0=done, 1=start of fade
 
   const exportCancelRef = useRef(false);  // set true to abort a running export
 
@@ -356,7 +363,19 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
   // ── Sync state → refs (MUST be defined before drawFrame effect) ───────────
   // Reset engine-specific buffers when engine or variant changes
-  useEffect(() => { starsRef.current = []; lowFpsWindowsRef.current = 0; }, [engine]);
+  useEffect(() => {
+    starsRef.current = [];
+    lowFpsWindowsRef.current = 0;
+    // Capture current frame for crossfade before the engine switches
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        try { crossfadeRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height); } catch { /* ignore */ }
+        crossfadeAlpha.current = 1;
+      }
+    }
+  }, [engine]);
   useEffect(() => {
     starsRef.current = [];
     spheresRef.current = [];
@@ -817,6 +836,30 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           ctx.closePath(); ctx.fill();
         }
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+      } else if (vrnt === 'dots') {
+        // ── Dots: frequency dots orbiting a pulsing core ────────────────
+        const dotN = perf ? 64 : 128;
+        const dotStep = Math.floor(freq.length / dotN);
+        solarTRef.current += (0.012 + bass * 0.02 * sens) * energyMult;
+        const t2 = solarTRef.current;
+        for (let i = 0; i < dotN; i++) {
+          const v   = (freq[i * dotStep] / 255) * sens;
+          const ang = (i / dotN) * Math.PI * 2 + t2 * 0.12;
+          // Two concentric rings of dots — inner and outer
+          for (const [ring, rMult] of [[0, 1.0], [1, 1.55]] as [number, number][]) {
+            const r      = coreR * rMult * (1.35 + v * 1.8 * (0.5 + sectionIntensity * 0.5));
+            const dotX   = cx + Math.cos(ang + ring * Math.PI / dotN) * r;
+            const dotY   = cy + Math.sin(ang + ring * Math.PI / dotN) * r;
+            const color  = liveColors[(i + ring) % liveColors.length];
+            const size   = Math.max(0.5, 1.2 + v * 7 * (0.4 + sectionIntensity * 0.6));
+            if (v < 0.025) continue;
+            ctx.fillStyle   = color;
+            ctx.globalAlpha = 0.25 + v * 0.75;
+            ctx.shadowColor = color; ctx.shadowBlur = size * 3.5;
+            ctx.beginPath(); ctx.arc(dotX, dotY, size, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
       } else {
         // ── Spokes (default) ───────────────────────────────────────────
         for (let i = 0; i < bars; i++) {
@@ -849,7 +892,64 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       smoothedBurstRef.current *= 0.84;
       const burst = smoothedBurstRef.current;
 
-      if (vrnt === 'web') {
+      if (vrnt === 'pulse') {
+        // ── Pulse: shockwave rings launch from core on every beat ────────
+        if (!planetsRef.current) planetsRef.current = [];
+        // Spawn ring on beat onset
+        if (orbitOnset > 0.045) {
+          const pCount = Math.floor(1 + orbitOnset * 3);
+          for (let p = 0; p < pCount && planetsRef.current.length < 24; p++) {
+            planetsRef.current.push({
+              r:      Math.min(w,h) * 0.04,
+              speed:  (2.8 + orbitOnset * 5 + Math.random() * 2) * energyMult,
+              alpha:  Math.min(1, 0.55 + orbitOnset * 1.8),
+              color:  liveColors[Math.floor(Math.random() * liveColors.length)],
+              lw:     1.5 + orbitOnset * 8,
+            } as any);
+          }
+        }
+        // Draw background: subtle rotating mesh of 3 standing rings
+        for (let i = 0; i < 3; i++) {
+          const bv  = avg(freq, i * 20, i * 20 + 20);
+          const r   = Math.min(w,h) * (0.14 + i * 0.11) * (1 + bv * sens * 0.22);
+          const rot = cameraTRef.current * (0.18 + i * 0.09) * (i % 2 === 0 ? 1 : -1);
+          ctx.save();
+          ctx.strokeStyle = liveColors[i % liveColors.length];
+          ctx.lineWidth   = 0.8 + bv * 2;
+          ctx.globalAlpha = 0.12 + bv * 0.28;
+          ctx.translate(cx, cy); ctx.rotate(rot); ctx.scale(1, 0.55);
+          ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+          ctx.restore();
+        }
+        // Shockwave rings expand + fade
+        planetsRef.current = (planetsRef.current as any[]).filter((ring: any) => {
+          ring.r     += ring.speed;
+          ring.alpha *= 0.90;
+          ring.lw    *= 0.94;
+          if (ring.alpha < 0.02 || ring.r > Math.min(w,h) * 0.7) return false;
+          ctx.save();
+          ctx.strokeStyle = ring.color;
+          ctx.lineWidth   = ring.lw;
+          ctx.globalAlpha = ring.alpha * (0.55 + sectionIntensity * 0.45);
+          ctx.shadowColor = ring.color; ctx.shadowBlur = 12 + burst * 18;
+          ctx.beginPath(); ctx.arc(cx, cy, ring.r, 0, Math.PI * 2); ctx.stroke();
+          // Inner fill bloom
+          ctx.globalAlpha = ring.alpha * 0.08;
+          ctx.fillStyle   = ring.color; ctx.shadowBlur = 0;
+          ctx.beginPath(); ctx.arc(cx, cy, ring.r * 0.92, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+          return true;
+        });
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+        // Core
+        const cG = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(w,h) * 0.07 * (1 + burst * 0.6));
+        cG.addColorStop(0, '#ffffff'); cG.addColorStop(0.3, liveColors[0]); cG.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = cG; ctx.globalAlpha = 0.8 + burst * 0.2;
+        ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 16 + burst * 24;
+        ctx.beginPath(); ctx.arc(cx, cy, Math.min(w,h) * 0.07 * (1 + burst * 0.6), 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+      } else if (vrnt === 'web') {
         // ── Web: concentric rings laced with radial spokes ───────────────
         const spokeN = perf ? 8 : 14;
         const ringN  = perf ? 4 : 7;
@@ -1937,6 +2037,15 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     }
 
     // ── Post-processing ───────────────────────────────────────────────────
+    // Engine crossfade: overlay previous frame fading out over ~18 frames
+    if (crossfadeAlpha.current > 0 && crossfadeRef.current) {
+      ctx.save();
+      ctx.globalAlpha = crossfadeAlpha.current;
+      ctx.putImageData(crossfadeRef.current, 0, 0);
+      ctx.restore();
+      crossfadeAlpha.current = Math.max(0, crossfadeAlpha.current - 0.06);
+      if (crossfadeAlpha.current <= 0) crossfadeRef.current = null;
+    }
     // Drop entry flash: brief white pulse at the very start of a drop/chorus
     if (activeSection && sectionProgress < 0.04 &&
         (activeSection.label === 'drop' || activeSection.label === 'chorus')) {
@@ -2276,6 +2385,21 @@ if (dbExports.length > 0) {
     if (file) { stopAudio(); setPlaying(false); playingRef.current = false; offsetRef.current = 0; loadFile(file); }
   };
 
+  const toggleFullscreen = () => {
+    const el = document.documentElement;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  };
+  // Sync state if user presses Esc to exit fullscreen natively
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
   // ── Project config JSON export / import ───────────────────────────────────
   const exportProjectConfig = () => {
     const config = {
@@ -2554,9 +2678,15 @@ if (dbExports.length > 0) {
             </div>
           </div>
         </div>
-        <Button variant="outline" onClick={onPickFile} className="border-white/20 text-white hover:bg-white/10 shrink-0 h-8 text-xs">
-          <Upload className="size-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Replace track</span>
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="outline" onClick={onPickFile} className="border-white/20 text-white hover:bg-white/10 shrink-0 h-8 text-xs">
+            <Upload className="size-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Replace track</span>
+          </Button>
+          <Button variant="ghost" onClick={toggleFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            className="border border-white/15 text-gray-300 hover:bg-white/10 shrink-0 h-8 w-8 p-0">
+            {isFullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+          </Button>
+        </div>
       </div>
  
       {/* ── Main content (fills remaining viewport) ─────────────── */}
@@ -2564,13 +2694,13 @@ if (dbExports.length > 0) {
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-y-auto lg:overflow-hidden">
  
         {/* Left: canvas + transport — fixed height on mobile, flex-1 on desktop */}
-        <div className="flex flex-col shrink-0 lg:flex-1 p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden
-                        min-h-[180px] lg:min-h-0 lg:h-auto"
+        <div className={`flex flex-col shrink-0 lg:flex-1 p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden
+                        min-h-[180px] lg:min-h-0 lg:h-auto ${isFullscreen ? 'flex-1 !p-0 !gap-0' : ''}`}
              style={{
                // Mobile: 9:16 gets a compact preview — tall enough to see, short enough to leave room for tabs
-               height: typeof window !== 'undefined' && window.innerWidth < 1024
+               height: isFullscreen ? '100%' : (typeof window !== 'undefined' && window.innerWidth < 1024
                  ? (aspect === '9:16' ? 'min(50vh, 340px)' : aspect === '1:1' ? 'min(60vw, 340px)' : 'min(46vw, 300px)')
-                 : undefined,
+                 : undefined),
              }}>
  
           {/* Canvas viewport — auto-adjusts to selected aspect ratio */}
@@ -2698,10 +2828,39 @@ if (dbExports.length > 0) {
                 </div>
               </div>
             )}
+
+            {/* Fullscreen floating transport — only visible in fullscreen mode */}
+            {isFullscreen && status === 'ready' && (
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
+                <div className="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-black/70 border border-white/10 backdrop-blur-md shadow-2xl">
+                  <button onClick={() => (playing ? pause() : play())}
+                    className="size-9 rounded-full bg-white text-gray-900 flex items-center justify-center hover:bg-gray-100 transition-colors shrink-0">
+                    {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                  </button>
+                  <span className="text-xs text-gray-300 tabular-nums shrink-0">{fmt(currentTime)} / {fmt(project?.duration ?? 0)}</span>
+                  {/* Mini seek bar */}
+                  <div className="w-32 sm:w-48 relative h-5 cursor-pointer"
+                    onClick={(e) => {
+                      if (!project) return;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      seek(((e.clientX - rect.left) / rect.width) * project.duration);
+                    }}>
+                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 bg-white/20 rounded-full" />
+                    <div className="absolute top-1/2 -translate-y-1/2 h-0.5 bg-white rounded-full" style={{ width: `${pct}%` }} />
+                    <div className="absolute top-1/2 -translate-y-1/2 size-2.5 -ml-1.5 rounded-full bg-white shadow"
+                      style={{ left: `${pct}%` }} />
+                  </div>
+                  <button onClick={toggleFullscreen}
+                    className="text-gray-400 hover:text-white transition-colors">
+                    <Minimize2 className="size-4" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
  
           {/* Sign-in nudge — shown once to anonymous users after audio loads */}
-          {showSignInNudge && !user && (
+          {showSignInNudge && !user && !isFullscreen && (
             <div className="shrink-0 flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs">
               <span className="flex-1 text-gray-300">
                 Sign in to save this project and access it from any device.
@@ -2723,8 +2882,8 @@ if (dbExports.length > 0) {
             </div>
           )}
 
-          {/* Transport bar (fixed height) */}
-          <div className="shrink-0 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5">
+          {/* Transport bar (fixed height) — hidden in fullscreen, replaced by floating overlay */}
+          {!isFullscreen && <div className="shrink-0 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5">
             <div className="flex items-center gap-3">
               <Button size="icon" disabled={!project} onClick={() => (playing ? pause() : play())}
                 title="Play / Pause  (Space or K)"
@@ -2797,10 +2956,11 @@ if (dbExports.length > 0) {
                   style={{ left: `${pct}%` }} />
               </div>
             </div>
-          </div>
+          </div>}{/* end transport bar */}
         </div>
  
         {/* Right: tabbed control panel — full natural height on mobile (page scrolls), fixed panel on desktop */}
+        {!isFullscreen && (
         <div className="shrink-0 w-full border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col
                         lg:flex-none lg:min-h-0 lg:overflow-hidden lg:w-[340px] xl:w-[360px]">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col lg:h-full">
@@ -3292,6 +3452,7 @@ if (dbExports.length > 0) {
             </div>{/* closes flex-1 overflow-y-auto */}
           </Tabs>
         </div>
+        )}{/* end !isFullscreen */}
         </div>
       {/* Hidden file inputs */}
       <input ref={configFileInputRef} type="file" accept=".json,application/json" className="hidden"
