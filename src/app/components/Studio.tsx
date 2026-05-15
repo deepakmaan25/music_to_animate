@@ -283,6 +283,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [showPerfSuggest, setShowPerfSuggest] = useState(false);
   const lowFpsWindowsRef = useRef(0);  // consecutive 500ms windows with fps < 30
   const isDraggingSeekRef = useRef(false);
+  const freqBufRef = useRef<Uint8Array | null>(null);   // reused every frame — avoids GC pressure
   const audioCtxRef  = useRef<AudioContext | null>(null);
   const analyserRef  = useRef<AnalyserNode | null>(null);
   const gainRef      = useRef<GainNode | null>(null);
@@ -511,8 +512,12 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       return;
     }
 
-    const freq = new Uint8Array(analyser.frequencyBinCount);
-    analyser.getByteFrequencyData(freq);
+    // Reuse a persistent buffer — avoids GC pressure from 60 allocations/sec
+    if (!freqBufRef.current || freqBufRef.current.length !== analyser.frequencyBinCount) {
+      freqBufRef.current = new Uint8Array(analyser.frequencyBinCount);
+    }
+    analyser.getByteFrequencyData(freqBufRef.current);
+    const freq = freqBufRef.current;
 
     // ── Phase 9: section + energy context ─────────────────────────────────
     const playbackSec = audioCtxRef.current
@@ -838,6 +843,11 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const cx = w / 2, cy = h / 2;
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
       cameraTRef.current += (0.004 + bass * 0.01 * sens) * energyMult;
+      const orbitOnset = Math.max(0, bass - prevBassRef.current);
+      if (eng === 'orbital') prevBassRef.current = bass;
+      if (orbitOnset > 0.05) smoothedBurstRef.current = Math.min(1, smoothedBurstRef.current + orbitOnset * 2.5);
+      smoothedBurstRef.current *= 0.84;
+      const burst = smoothedBurstRef.current;
 
       if (vrnt === 'web') {
         // ── Web: concentric rings laced with radial spokes ───────────────
@@ -1304,6 +1314,11 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       ctx.fillStyle = `rgba(2,2,10,${0.18 + (1-sectionIntensity)*0.08})`;
       ctx.fillRect(0, 0, w, h);
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
+      const tunnelOnset = Math.max(0, bass - prevBassRef.current);
+      if (eng === 'tunnel') prevBassRef.current = bass;
+      if (tunnelOnset > 0.05) smoothedBurstRef.current = Math.min(1, smoothedBurstRef.current + tunnelOnset * 2.5);
+      smoothedBurstRef.current *= 0.84;
+      const burst = smoothedBurstRef.current;
       tunnelTRef.current += (0.004 + mids * 0.008 * sens) * energyMult;
       const t = tunnelTRef.current;
       const cx2 = w / 2;
@@ -1696,107 +1711,229 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
     // ── Solar System (new) ────────────────────────────────────────────────
     } else if (eng === 'solar') {
-      // ── Geometric Pulse — concentric beat rings ───────────────────────
-      ctx.fillStyle = `rgba(2,2,10,${0.28 + (1-sectionIntensity)*0.10})`;
-      ctx.fillRect(0, 0, w, h);
+      // ── Geometric Pulse — layered concentric beat system ─────────────
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
       solarTRef.current += (0.006 + bass * 0.018 * sens) * energyMult;
       const t = solarTRef.current;
       const cx = w / 2, cy = h / 2;
       const minDim = Math.min(w, h);
 
-      // Beat onset for ring spawn
+      // Beat onset
       const geoOnset = Math.max(0, bass - prevBassRef.current);
       if (eng === 'solar') prevBassRef.current = bass;
       if (geoOnset > 0.05) smoothedBurstRef.current = Math.min(1, smoothedBurstRef.current + geoOnset * 2.5);
       smoothedBurstRef.current *= 0.84;
       const burst = smoothedBurstRef.current;
 
-      // Spawn new rings on beat — stored in planetsRef as { r, maxR, alpha, colorIdx, sides }
-      if (!planetsRef.current) planetsRef.current = [];
-      if (geoOnset > 0.06 && planetsRef.current.length < 20) {
-        const sides = vrnt === 'square' ? 4 : vrnt === 'hex' ? 6 : 0; // 0 = circle
-        planetsRef.current.push({
-          r: minDim * 0.04,
-          maxR: minDim * (0.28 + geoOnset * 0.45) * (0.6 + sectionIntensity * 0.4),
-          alpha: Math.min(0.9, geoOnset * 2.2),
-          colorIdx: Math.floor(Math.random() * liveColors.length),
-          sides,
-          thickness: 1.5 + geoOnset * 5,
-        } as any);
+      // Variant shape config
+      const sides = vrnt === 'square' ? 4 : vrnt === 'hex' ? 6 : 0;
+
+      // Shape helper — polygon or circle, centred on cx/cy
+      const drawShape = (r: number, rot = 0, n = sides) => {
+        if (n === 0) { ctx.arc(cx, cy, r, 0, Math.PI * 2); return; }
+        for (let s = 0; s <= n; s++) {
+          const a = (s / n) * Math.PI * 2 + rot;
+          s === 0 ? ctx.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r)
+                  : ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+        }
+      };
+
+      // ── 1. Background ─────────────────────────────────────────────
+      ctx.fillStyle = `rgba(2,2,10,${0.32 + (1 - sectionIntensity) * 0.10})`;
+      ctx.fillRect(0, 0, w, h);
+
+      // Ambient pulse — wide, very transparent radial bloom
+      const ambR   = minDim * (0.58 + burst * 0.14 + currentEnergy * 0.11);
+      const ambGrd = ctx.createRadialGradient(cx, cy, 0, cx, cy, ambR);
+      ambGrd.addColorStop(0,   `rgba(${hexToRgb(liveColors[1])}, ${0.08 + burst * 0.09})`);
+      ambGrd.addColorStop(0.6, `rgba(${hexToRgb(liveColors[2])}, ${0.03 + sectionIntensity * 0.03})`);
+      ambGrd.addColorStop(1,   'rgba(0,0,0,0)');
+      ctx.fillStyle = ambGrd;
+      ctx.beginPath(); ctx.arc(cx, cy, ambR, 0, Math.PI * 2); ctx.fill();
+
+      // ── 2. Frequency spectrum ring ────────────────────────────────
+      // 64 outward spikes at inner radius — like a polar spectrum chart
+      if (!perf) {
+        const specR  = minDim * 0.145;
+        const specN  = 64;
+        const specStep = Math.max(1, Math.floor(freq.length * 0.5 / specN));
+        ctx.save();
+        for (let i = 0; i < specN; i++) {
+          const v     = (freq[i * specStep] / 255) * sens;
+          if (v < 0.04) continue;
+          const angle = (i / specN) * Math.PI * 2 - Math.PI / 2;
+          const spike = v * minDim * 0.10 * (0.5 + sectionIntensity * 0.5);
+          const color = liveColors[i % liveColors.length];
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = 2 + v * 3;
+          ctx.globalAlpha = 0.30 + v * 0.70;
+          ctx.shadowColor = color; ctx.shadowBlur = 3 + v * 10;
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(angle) * specR, cy + Math.sin(angle) * specR);
+          ctx.lineTo(cx + Math.cos(angle) * (specR + spike), cy + Math.sin(angle) * (specR + spike));
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+        ctx.restore();
       }
 
-      // Draw and expand rings
+      // ── 3. Spawn beat rings + particle burst ─────────────────────
+      if (!planetsRef.current) planetsRef.current = [];
+      if (!sparksRef.current)  sparksRef.current  = [];
+
+      if (geoOnset > 0.055) {
+        if (planetsRef.current.length < 28) {
+          planetsRef.current.push({
+            r:        minDim * 0.045,
+            maxR:     minDim * (0.32 + geoOnset * 0.40) * (0.65 + sectionIntensity * 0.35),
+            alpha:    Math.min(0.98, geoOnset * 2.6),
+            colorIdx: Math.floor(Math.random() * liveColors.length),
+            sides,
+            thickness: 2.5 + geoOnset * 8,
+            type:     'ring',
+          } as any);
+        }
+        // Particle burst: outward flying sparks
+        const pCount = perf ? 5 : Math.floor(10 + geoOnset * 22);
+        for (let p = 0; p < pCount && (sparksRef.current as any[]).length < 140; p++) {
+          const angle = Math.random() * Math.PI * 2;
+          const spd   = (2 + Math.random() * 4 + geoOnset * 5) * (0.5 + sectionIntensity * 0.5);
+          (sparksRef.current as any[]).push({
+            x: cx + (Math.random() - 0.5) * 8,
+            y: cy + (Math.random() - 0.5) * 8,
+            vx: Math.cos(angle) * spd,
+            vy: Math.sin(angle) * spd,
+            life: 0.88 + Math.random() * 0.12,
+            colorIdx: Math.floor(Math.random() * liveColors.length),
+            size: 1.8 + Math.random() * 2.8 + geoOnset * 3.5,
+          });
+        }
+      }
+
+      // ── 4. Expand and draw beat rings ─────────────────────────────
       planetsRef.current = (planetsRef.current as any[]).filter((ring: any) => {
-        ring.r += (3 + mids * 8 * sens) * energyMult;
-        ring.alpha *= 0.92;
-        if (ring.alpha < 0.02 || ring.r > ring.maxR * 1.2) return false;
+        ring.r     += (3.5 + mids * 9 * sens) * energyMult;
+        ring.alpha *= 0.91;
+        if (ring.alpha < 0.014 || ring.r > ring.maxR * 1.25) return false;
 
         const color = liveColors[ring.colorIdx % liveColors.length];
+        const rot   = t * 0.22;
         ctx.save();
+        // Outer glow stroke
         ctx.strokeStyle = color;
-        ctx.lineWidth = ring.thickness * ring.alpha * 2;
+        ctx.lineWidth   = ring.thickness * ring.alpha * 2.4;
         ctx.globalAlpha = ring.alpha;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 12 + burst * 20;
-        ctx.beginPath();
-        if (ring.sides === 0) {
-          ctx.arc(cx, cy, ring.r, 0, Math.PI * 2);
-        } else {
-          const rot = t * 0.3;
-          for (let s = 0; s <= ring.sides; s++) {
-            const a = (s / ring.sides) * Math.PI * 2 + rot;
-            const x = cx + Math.cos(a) * ring.r;
-            const y = cy + Math.sin(a) * ring.r;
-            s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-          }
-        }
-        ctx.stroke();
+        ctx.shadowColor = color; ctx.shadowBlur = 16 + burst * 24;
+        ctx.beginPath(); drawShape(ring.r, rot, ring.sides); ctx.stroke();
+        // Subtle fill bloom on the ring interior
+        ctx.globalAlpha = ring.alpha * 0.12;
+        ctx.fillStyle   = color; ctx.shadowBlur = 0;
+        ctx.beginPath(); drawShape(ring.r * 0.90, rot, ring.sides); ctx.fill();
         ctx.restore();
         return true;
       });
       ctx.shadowBlur = 0; ctx.globalAlpha = 1;
 
-      // Standing rings: permanent spectrum-driven rings at fixed radii
-      const standingCount = 4;
-      const standingSides = vrnt === 'square' ? 4 : vrnt === 'hex' ? 6 : 0; // 0 = circle
+      // ── 5. Particles ──────────────────────────────────────────────
+      sparksRef.current = (sparksRef.current as any[]).filter((p: any) => {
+        p.x  += p.vx; p.y  += p.vy;
+        p.vx *= 0.960; p.vy *= 0.960;
+        p.life *= 0.934;
+        if (p.life < 0.018) return false;
+        const color = liveColors[p.colorIdx % liveColors.length];
+        ctx.fillStyle = color;
+        ctx.globalAlpha = p.life * (0.55 + sectionIntensity * 0.45);
+        ctx.shadowColor = color; ctx.shadowBlur = p.size * 3.5;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2); ctx.fill();
+        return true;
+      });
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+      // ── 6. Standing rings — filled + stroked + glowing ────────────
+      const standingCount = perf ? 4 : 6;
       for (let i = 0; i < standingCount; i++) {
-        const r = minDim * (0.10 + i * 0.10 + mids * 0.04 * sens * (0.5 + sectionIntensity * 0.5));
-        const bandVal = avg(freq, Math.floor(i * freq.length / (standingCount * 2)), Math.floor((i+1) * freq.length / (standingCount * 2)));
-        const color = liveColors[i % liveColors.length];
-        const liveR = r * (1 + bandVal * sens * 0.35 * (0.4 + sectionIntensity * 0.6));
+        const t2      = (i + 1) / (standingCount + 1);
+        const freqLo  = Math.floor(t2 * freq.length * 0.45);
+        const bandVal = avg(freq, freqLo, freqLo + 12);
+        const baseR   = minDim * (0.115 + i * 0.082);
+        const liveR   = baseR * (1 + bandVal * sens * 0.38 * (0.4 + sectionIntensity * 0.6));
+        const color   = liveColors[i % liveColors.length];
+        const rot     = sides === 0 ? 0 : t * 0.11 + i * (Math.PI / Math.max(sides, 1));
+
         ctx.save();
+        // Glow stroke
         ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5 + bandVal * 4;
-        ctx.globalAlpha = 0.25 + bandVal * 0.55;
-        ctx.shadowColor = color; ctx.shadowBlur = 4 + bandVal * 18;
-        ctx.beginPath();
-        if (standingSides === 0) {
-          ctx.arc(cx, cy, liveR, 0, Math.PI * 2);
-        } else {
-          // Polygon — slow rotation so it feels alive
-          const rot = t * 0.12 + i * (Math.PI / standingSides);
-          for (let s = 0; s <= standingSides; s++) {
-            const a = (s / standingSides) * Math.PI * 2 + rot;
-            s === 0
-              ? ctx.moveTo(cx + Math.cos(a) * liveR, cy + Math.sin(a) * liveR)
-              : ctx.lineTo(cx + Math.cos(a) * liveR, cy + Math.sin(a) * liveR);
+        ctx.lineWidth   = 1.8 + bandVal * 5.5;
+        ctx.globalAlpha = 0.30 + bandVal * 0.70;
+        ctx.shadowColor = color;
+        ctx.shadowBlur  = 10 + bandVal * 24 + (i === 0 ? burst * 16 : 0);
+        ctx.beginPath(); drawShape(liveR, rot); ctx.stroke();
+
+        // Fill — makes rings look solid, not just outlines
+        ctx.globalAlpha = (0.05 + bandVal * 0.10) * (0.5 + sectionIntensity * 0.5);
+        ctx.fillStyle   = color; ctx.shadowBlur = 0;
+        ctx.beginPath(); drawShape(liveR, rot); ctx.fill();
+
+        // Vertex highlight dots for polygon variants
+        if (sides > 0 && bandVal > 0.28 && !perf) {
+          for (let v2 = 0; v2 < sides; v2++) {
+            const a = (v2 / sides) * Math.PI * 2 + rot;
+            const hx = cx + Math.cos(a) * liveR;
+            const hy = cy + Math.sin(a) * liveR;
+            ctx.fillStyle   = '#ffffff';
+            ctx.globalAlpha = bandVal * 0.6 * (i === standingCount - 1 ? 1 : 0.4);
+            ctx.shadowColor = color; ctx.shadowBlur = 5 + bandVal * 12;
+            ctx.beginPath(); ctx.arc(hx, hy, 1.8 + bandVal * 3.5, 0, Math.PI * 2); ctx.fill();
           }
         }
-        ctx.stroke();
         ctx.restore();
       }
       ctx.shadowBlur = 0; ctx.globalAlpha = 1;
 
-      // Core glow
-      const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, minDim * 0.06 * (1 + burst * 0.5));
-      coreGrad.addColorStop(0, liveColors[0]);
-      coreGrad.addColorStop(0.4, `rgba(${hexToRgb(liveColors[1])}, 0.4)`);
-      coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = coreGrad;
-      ctx.globalAlpha = 0.7 + burst * 0.3;
-      ctx.beginPath(); ctx.arc(cx, cy, minDim * 0.06 * (1 + burst * 0.5), 0, Math.PI * 2); ctx.fill();
-      ctx.globalAlpha = 1;
+      // ── 7. Light rays on strong beats ─────────────────────────────
+      if (burst > 0.28 && !perf) {
+        const rayN   = sides > 0 ? sides * 2 : 12;
+        const rayLen = minDim * (0.38 + burst * 0.22);
+        ctx.save();
+        for (let r2 = 0; r2 < rayN; r2++) {
+          const angle = (r2 / rayN) * Math.PI * 2 + t * 0.07;
+          const color = liveColors[r2 % liveColors.length];
+          const grd   = ctx.createLinearGradient(
+            cx, cy,
+            cx + Math.cos(angle) * rayLen,
+            cy + Math.sin(angle) * rayLen,
+          );
+          grd.addColorStop(0, `rgba(${hexToRgb(color)}, ${(burst - 0.28) * 0.60})`);
+          grd.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.strokeStyle = grd;
+          ctx.lineWidth   = 0.8 + burst * 2.8;
+          ctx.globalAlpha = burst * 0.85;
+          ctx.beginPath(); ctx.moveTo(cx, cy);
+          ctx.lineTo(cx + Math.cos(angle) * rayLen, cy + Math.sin(angle) * rayLen);
+          ctx.stroke();
+        }
+        ctx.restore(); ctx.globalAlpha = 1;
+      }
+
+      // ── 8. Multi-layer core glow ──────────────────────────────────
+      const coreR = minDim * 0.058 * (1 + burst * 0.55 + bass * sens * 0.28);
+      // Wide outer halo
+      const haloGrd = ctx.createRadialGradient(cx, cy, coreR * 0.4, cx, cy, coreR * 4.8);
+      haloGrd.addColorStop(0, `rgba(${hexToRgb(liveColors[1])}, ${0.14 + burst * 0.18})`);
+      haloGrd.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = haloGrd;
+      ctx.beginPath(); ctx.arc(cx, cy, coreR * 4.8, 0, Math.PI * 2); ctx.fill();
+      // Bright core
+      const coreGrd = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+      coreGrd.addColorStop(0,    '#ffffff');
+      coreGrd.addColorStop(0.22, liveColors[0]);
+      coreGrd.addColorStop(0.62, `rgba(${hexToRgb(liveColors[1])}, 0.55)`);
+      coreGrd.addColorStop(1,    'rgba(0,0,0,0)');
+      ctx.fillStyle = coreGrd;
+      ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 20 + burst * 30;
+      ctx.globalAlpha = 0.88 + burst * 0.12;
+      ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
     }
 
     // ── Post-processing ───────────────────────────────────────────────────
@@ -2424,15 +2561,15 @@ if (dbExports.length > 0) {
  
       {/* ── Main content (fills remaining viewport) ─────────────── */}
       {/* empty */}
-      <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
+      <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-y-auto lg:overflow-hidden">
  
         {/* Left: canvas + transport — fixed height on mobile, flex-1 on desktop */}
         <div className="flex flex-col shrink-0 lg:flex-1 p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden
-                        min-h-[220px] lg:min-h-0 lg:h-auto"
+                        min-h-[180px] lg:min-h-0 lg:h-auto"
              style={{
-               // On mobile: portrait aspects get more height, landscape gets less
+               // Mobile: 9:16 gets a compact preview — tall enough to see, short enough to leave room for tabs
                height: typeof window !== 'undefined' && window.innerWidth < 1024
-                 ? (aspect === '9:16' ? 'min(78vh, 520px)' : aspect === '1:1' ? 'min(60vw, 380px)' : 'min(50vw, 340px)')
+                 ? (aspect === '9:16' ? 'min(50vh, 340px)' : aspect === '1:1' ? 'min(60vw, 340px)' : 'min(46vw, 300px)')
                  : undefined,
              }}>
  
@@ -2663,10 +2800,12 @@ if (dbExports.length > 0) {
           </div>
         </div>
  
-        {/* Right: tabbed control panel (scrollable within itself) */}
-        <div className="flex-1 min-h-0 border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col overflow-hidden lg:w-[340px] xl:w-[360px] lg:flex-none">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
-            <TabsList className="grid grid-cols-5 w-full bg-white/5 rounded-none border-b border-white/10 shrink-0 h-10">
+        {/* Right: tabbed control panel — full natural height on mobile (page scrolls), fixed panel on desktop */}
+        <div className="shrink-0 w-full border-t lg:border-t-0 lg:border-l border-white/10 flex flex-col
+                        lg:flex-none lg:min-h-0 lg:overflow-hidden lg:w-[340px] xl:w-[360px]">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col lg:h-full">
+            <TabsList className="grid grid-cols-5 w-full bg-white/5 rounded-none border-b border-white/10 shrink-0 h-10
+                                  sticky top-0 z-10 lg:relative lg:top-auto backdrop-blur-sm">
               <TabsTrigger value="style"   className="text-[10px] sm:text-xs">Style</TabsTrigger>
               <TabsTrigger value="motion"  className="text-[10px] sm:text-xs">Motion</TabsTrigger>
               <TabsTrigger value="color"   className="text-[10px] sm:text-xs">Color</TabsTrigger>
@@ -2689,8 +2828,8 @@ if (dbExports.length > 0) {
               </div>
             )}
  
-            {/* Each tab content is scrollable */}
-            <div className="flex-1 overflow-y-auto">
+            {/* Each tab content is scrollable on desktop; on mobile the page itself scrolls */}
+            <div className="lg:flex-1 lg:overflow-y-auto">
  
               {/* ── Style ───────────────────────────────────────── */}
               <TabsContent value="style" className="p-4 space-y-4 mt-0">
