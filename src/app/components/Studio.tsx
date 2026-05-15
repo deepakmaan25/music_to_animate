@@ -537,7 +537,9 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
   // Show keyboard shortcut coach mark once after first successful load
   useEffect(() => {
-    if (status === 'ready' && !localStorage.getItem('ma_seen_shortcuts')) {
+    // Never show keyboard shortcut coach mark on touch devices — shortcuts don't apply
+    const isTouchDevice = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    if (status === 'ready' && !isTouchDevice && !localStorage.getItem('ma_seen_shortcuts')) {
       const t = setTimeout(() => setShowOnboarding(true), 1800);
       return () => clearTimeout(t);
     }
