@@ -111,10 +111,12 @@ const VARIANTS: Partial<Record<EngineId, { id: string; label: string; descriptio
   orbital: [
     { id: 'rings', label: 'Rings', description: 'Tilting concentric rings (default)' },
     { id: 'helix', label: 'Helix', description: 'Stacked rings twist into a DNA double helix' },
+    { id: 'web',   label: 'Web',   description: 'Rings laced with radial spokes — spins on every beat' },
   ],
   tunnel: [
     { id: 'aurora',   label: 'Aurora',   description: 'Layered horizontal ribbon curtains (default)' },
     { id: 'vertical', label: 'Vertical', description: 'Vertical ribbon columns — like a visualizer waterfall' },
+    { id: 'spiral',   label: 'Spiral',   description: 'Vanishing-point rings collapse inward like a tunnel' },
   ],
   solar: [
     { id: 'circle', label: 'Circle',  description: 'Smooth circular expanding rings (default)' },
@@ -129,6 +131,7 @@ const VARIANTS: Partial<Record<EngineId, { id: string; label: string; descriptio
   neon_spheres: [
     { id: 'float',  label: 'Float',  description: 'Freeform drifting spheres (default)' },
     { id: 'orbit',  label: 'Orbit',  description: 'Spheres orbit a central glow point' },
+    { id: 'burst',  label: 'Burst',  description: 'All spheres explode from centre on every beat' },
   ],
   fractal: [
     { id: 'kaleidoscope', label: 'Kaleidoscope', description: 'Mirrored radial burst lines (default)' },
@@ -141,6 +144,8 @@ const PALETTES: { name: string; colors: [string, string, string] }[] = [
   { name: 'Ocean',  colors: ['#06b6d4', '#3b82f6', '#8b5cf6'] },
   { name: 'Forest', colors: ['#10b981', '#84cc16', '#fbbf24'] },
   { name: 'Mono',   colors: ['#ffffff', '#9ca3af', '#4b5563'] },
+  { name: 'Neon',   colors: ['#f0abfc', '#22d3ee', '#a3e635'] },
+  { name: 'Dusk',   colors: ['#fb923c', '#e11d48', '#7c3aed'] },
 ];
 
 const PRESETS = [
@@ -350,7 +355,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
   // ── Sync state → refs (MUST be defined before drawFrame effect) ───────────
   // Reset engine-specific buffers when engine or variant changes
-  useEffect(() => { starsRef.current = []; }, [engine]);
+  useEffect(() => { starsRef.current = []; lowFpsWindowsRef.current = 0; }, [engine]);
   useEffect(() => {
     starsRef.current = [];
     spheresRef.current = [];
@@ -586,11 +591,18 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       if (elapsed > 0) {
         const measuredFps = Math.round((fpsFramesRef.current / elapsed) * 1000);
         setFps(measuredFps);
-        // Auto-perf suggestion: 4 consecutive low windows ≈ 2s of sluggish playback
-        if (measuredFps < 30 && playingRef.current && !perfModeRef.current) {
+        // Auto-perf suggestion: 12 consecutive low windows ≈ 6s of sustained sluggishness
+        // Threshold is 25fps (clearly choppy) not 30 (brief dips are normal on heavy engines)
+        // Only fires once per session via localStorage flag
+        if (measuredFps < 25 && playingRef.current && !perfModeRef.current
+            && !localStorage.getItem('ma_perf_suggested')) {
           lowFpsWindowsRef.current += 1;
-          if (lowFpsWindowsRef.current >= 4) { setShowPerfSuggest(true); lowFpsWindowsRef.current = 0; }
-        } else {
+          if (lowFpsWindowsRef.current >= 12) {
+            setShowPerfSuggest(true);
+            localStorage.setItem('ma_perf_suggested', '1');
+            lowFpsWindowsRef.current = 0;
+          }
+        } else if (measuredFps >= 25) {
           lowFpsWindowsRef.current = 0;
         }
       }
@@ -827,8 +839,51 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
       cameraTRef.current += (0.004 + bass * 0.01 * sens) * energyMult;
 
-      if (vrnt === 'helix') {
-        // ── Helix: stacked rings twist into a DNA double helix ──────────
+      if (vrnt === 'web') {
+        // ── Web: concentric rings laced with radial spokes ───────────────
+        const spokeN = perf ? 8 : 14;
+        const ringN  = perf ? 4 : 7;
+        const webRot = cameraTRef.current * 0.22 + burst * 0.4;
+        // Rings
+        for (let r = 0; r < ringN; r++) {
+          const t2     = (r + 1) / ringN;
+          const bandV  = avg(freq, Math.floor(t2 * freq.length * 0.5), Math.floor(t2 * freq.length * 0.5) + 8);
+          const radius = Math.min(w, h) * 0.08 + t2 * Math.min(w, h) * 0.37 * (0.75 + sectionIntensity * 0.25);
+          const liveRadius = radius * (1 + bandV * sens * 0.25);
+          const color  = liveColors[r % liveColors.length];
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = 0.8 + bandV * 3.5 * sens;
+          ctx.globalAlpha = 0.25 + bandV * 0.65;
+          ctx.shadowColor = color; ctx.shadowBlur = 5 + bandV * 18;
+          ctx.beginPath(); ctx.arc(cx, cy, liveRadius, 0, Math.PI * 2); ctx.stroke();
+          ctx.restore();
+        }
+        // Spokes radiating from centre to outer ring
+        const outerR = Math.min(w, h) * 0.45 * (0.75 + sectionIntensity * 0.25);
+        for (let s = 0; s < spokeN; s++) {
+          const angle  = (s / spokeN) * Math.PI * 2 + webRot;
+          const bandV  = (freq[Math.min(Math.floor(s * freq.length / spokeN), freq.length - 1)] / 255) * sens;
+          const color  = liveColors[s % liveColors.length];
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = 0.6 + bandV * 2.2;
+          ctx.globalAlpha = 0.18 + bandV * 0.52;
+          ctx.shadowColor = color; ctx.shadowBlur = 4 + bandV * 12;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(cx + Math.cos(angle) * outerR, cy + Math.sin(angle) * outerR);
+          ctx.stroke();
+          ctx.restore();
+        }
+        // Centre glow
+        const cG = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(w,h) * 0.06 * (1 + burst * 0.8));
+        cG.addColorStop(0, liveColors[0]); cG.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = cG; ctx.globalAlpha = 0.6 + burst * 0.4;
+        ctx.beginPath(); ctx.arc(cx, cy, Math.min(w,h) * 0.06 * (1 + burst * 0.8), 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+      } else if (vrnt === 'helix') {        // ── Helix: stacked rings twist into a DNA double helix ──────────
         const helixN = perf ? 9 : 16;
         const bandH  = h / helixN;
         ctx.shadowBlur = 0;
@@ -1310,6 +1365,43 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           }
           ctx.restore();
         }
+      } else if (vrnt === 'spiral') {
+        // ── Spiral: vanishing-point rings collapsing inward ──────────────
+        const ringCount = perf ? 10 : 18;
+        tunnelTRef.current += (0.012 + bass * 0.022 * sens) * energyMult;
+        const speed = tunnelTRef.current;
+        for (let i = 0; i < ringCount; i++) {
+          // Phase offset makes each ring appear at a different point in the tunnel
+          const phase    = (i / ringCount + (speed * 0.18 % 1));
+          const normP    = phase % 1; // 0 = far (small), 1 = near (large, fading out)
+          const radius   = Math.min(w, h) * 0.04 + normP * Math.min(w, h) * 0.48;
+          const bandIdx  = Math.min(Math.floor(normP * freq.length * 0.6), freq.length - 1);
+          const bandV    = (freq[bandIdx] / 255) * sens;
+          const color    = liveColors[i % liveColors.length];
+          const alpha    = (1 - normP) * (0.55 + bandV * 0.45) * (0.5 + sectionIntensity * 0.5);
+          // Rotation increases toward camera (larger = faster apparent rotation)
+          const rot      = speed * 0.55 * (0.3 + normP * 1.4) + i * (Math.PI * 2 / ringCount);
+          // Slight ellipse for perspective feel
+          const ry       = radius * (0.62 + normP * 0.38);
+
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = (0.8 + normP * 5.5 + bandV * 4) * (0.5 + sectionIntensity * 0.5);
+          ctx.globalAlpha = alpha;
+          ctx.shadowColor = color;
+          ctx.shadowBlur  = (6 + bandV * 24) * (0.5 + sectionIntensity * 0.5);
+          ctx.translate(cx2, h / 2);
+          ctx.rotate(rot);
+          ctx.beginPath(); ctx.ellipse(0, 0, radius, ry, 0, 0, Math.PI * 2); ctx.stroke();
+          ctx.restore();
+        }
+        // Vanishing point glow
+        const vpGrad = ctx.createRadialGradient(cx2, h/2, 0, cx2, h/2, Math.min(w,h)*0.12*(1+burst*0.6));
+        vpGrad.addColorStop(0, liveColors[0]); vpGrad.addColorStop(1,'rgba(0,0,0,0)');
+        ctx.fillStyle = vpGrad; ctx.globalAlpha = 0.5 + burst * 0.5;
+        ctx.beginPath(); ctx.arc(cx2, h/2, Math.min(w,h)*0.12*(1+burst*0.6), 0, Math.PI*2); ctx.fill();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
       } else {
         // ── Aurora (default): horizontal ribbons ─────────────────────────
         for (let ri = 0; ri < numRibbons; ri++) {
@@ -1397,7 +1489,22 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
       // Orbit variant: each sphere orbits the centre at its own radius
       const orbitMode = vrnt === 'orbit';
+      const burstMode = vrnt === 'burst';
       const orbitCx = 0.5, orbitCy = 0.5;
+
+      // Burst mode: track how far each sphere has flown from centre
+      if (burstMode && sphereBeat > 0.06 && spheresRef.current.length > 0) {
+        // On every beat, reset all spheres to centre with random outward velocity
+        for (let i = 0; i < N; i++) {
+          const sp = spheresRef.current[i];
+          const angle = (i / N) * Math.PI * 2 + Math.random() * 0.6;
+          const spd   = (0.008 + sphereBeat * 0.014) * (0.7 + Math.random() * 0.6);
+          sp.x = 0.5 + (Math.random() - 0.5) * 0.04;
+          sp.y = 0.5 + (Math.random() - 0.5) * 0.04;
+          sp.vx = Math.cos(angle) * spd;
+          sp.vy = Math.sin(angle) * spd;
+        }
+      }
 
       for (let i = 0; i < N; i++) {
         const sp  = spheresRef.current[i];
@@ -1409,7 +1516,19 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           const orbitSpeed = baseMotion * (0.6 + i * 0.2) * (0.5 + sectionIntensity * 0.5);
           sp.phase += orbitSpeed;
           sp.x = orbitCx + Math.cos(sp.phase) * orbitR;
-          sp.y = orbitCy + Math.sin(sp.phase) * orbitR * 0.7; // slight ellipse
+          sp.y = orbitCy + Math.sin(sp.phase) * orbitR * 0.7;
+        } else if (burstMode) {
+          // Burst: fly outward then slowly drift back to centre
+          sp.vx *= 0.965;
+          sp.vy *= 0.965;
+          sp.x  += sp.vx;
+          sp.y  += sp.vy;
+          // Gentle pull back to centre when slow
+          const dx = 0.5 - sp.x, dy = 0.5 - sp.y;
+          sp.x += dx * 0.008;
+          sp.y += dy * 0.008;
+          sp.x = Math.max(0.04, Math.min(0.96, sp.x));
+          sp.y = Math.max(0.04, Math.min(0.96, sp.y));
         } else {
           // Float (default): freeform drift
           const driftSpeed = baseMotion * 0.03;
@@ -1446,14 +1565,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           ctx.beginPath(); ctx.arc(sx - r * 0.3, sy - r * 0.3, r * 0.12, 0, Math.PI * 2); ctx.fill();
         }
 
-        // In orbit mode: draw orbit path; in float mode: connection lines
+        // In orbit mode: draw orbit path; in float/burst modes: connection lines between close spheres
         if (orbitMode) {
           // Draw faint orbit ring
           const orbitR = (0.12 + i * 0.06) * Math.min(w, h);
           ctx.strokeStyle = color; ctx.lineWidth = 0.5;
           ctx.globalAlpha = 0.12 + be * 0.15;
           ctx.beginPath(); ctx.ellipse(w * orbitCx, h * orbitCy, orbitR, orbitR * 0.7, 0, 0, Math.PI * 2); ctx.stroke();
-        } else if (sectionIntensity > 0.6) {
+        } else if (sectionIntensity > 0.5) {
           for (let j = i + 1; j < N; j++) {
             const sp2 = spheresRef.current[j];
             const dist = Math.hypot(sp.x - sp2.x, sp.y - sp2.y);
