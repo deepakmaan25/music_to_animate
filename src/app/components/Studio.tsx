@@ -227,6 +227,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [trackAnalysis, setTrackAnalysis] = useState<TrackAnalysis | null>(null);
   const [recommendations, setRecommendations] = useState<EngineRecommendation[]>([]);
   const [activeTab, setActiveTab]     = useState<string>('style');
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const exportCancelRef = useRef(false);  // set true to abort a running export
 
@@ -300,6 +301,44 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   // ── Export mode (platform-aware, computed once) ────────────────────────────
   const exportMode = useMemo(() => getExportMode(), []);
 
+  // ── Restore persisted custom palette colours on mount ─────────────────────
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('ma_custom_palettes');
+      if (saved) {
+        const map: Record<number, [string, string, string]> = JSON.parse(saved);
+        Object.entries(map).forEach(([idx, cols]) => {
+          const i = Number(idx);
+          if (PALETTES[i] && Array.isArray(cols) && cols.length === 3) {
+            PALETTES[i] = { ...PALETTES[i], colors: cols };
+          }
+        });
+      }
+    } catch { /* ignore corrupt data */ }
+  }, []);
+
+  // ── Waveform seek bar — computed once per analysis ─────────────────────────
+  const waveformPoints = useMemo(() => {
+    if (!trackAnalysis?.energyCurve.length) return null;
+    const curve = trackAnalysis.energyCurve;
+    const N  = 200;    // horizontal sample count
+    const VW = 1000;   // viewBox width
+    const VH = 28;     // viewBox height (matches h-7 = 28px)
+    const cy = VH / 2;
+    const amp = cy * 0.82; // max amplitude: 82% of half-height
+    const top: string[] = [];
+    const bot: string[] = [];
+    for (let i = 0; i <= N; i++) {
+      const t   = i / N;
+      const idx = Math.min(Math.floor(t * (curve.length - 1)), curve.length - 1);
+      const v   = curve[idx];
+      top.push(`${(t * VW).toFixed(1)},${(cy - v * amp).toFixed(1)}`);
+      bot.push(`${(t * VW).toFixed(1)},${(cy + v * amp).toFixed(1)}`);
+    }
+    // Closed polygon: top sweep L→R, bottom sweep R→L
+    return [...top, ...[...bot].reverse()].join(' ');
+  }, [trackAnalysis]);
+
   // ── Sync state → refs (MUST be defined before drawFrame effect) ───────────
   // Reset engine-specific buffers when engine or variant changes
   useEffect(() => { starsRef.current = []; }, [engine]);
@@ -348,7 +387,12 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         e.preventDefault();
         if (project) seek(Math.min(project.duration, currentTime + 5));
       } else if (e.key === 'Escape') {
-        onBack();
+        if (showOnboarding) {
+          setShowOnboarding(false);
+          localStorage.setItem('ma_seen_shortcuts', '1');
+        } else {
+          onBack();
+        }
       } else if (e.key === 'm') {
         // Cycle through palettes
         setPalette((p) => (p + 1) % PALETTES.length);
@@ -356,7 +400,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [status, playing, currentTime, project]);
+  }, [status, playing, currentTime, project, showOnboarding]);
   useEffect(() => {
     if (!persist || !persistedId) return;
     persist.updateProject(persistedId, {
@@ -387,6 +431,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     }
     if (user) setShowSignInNudge(false);
   }, [status, user]);
+
+  // Show keyboard shortcut coach mark once after first successful load
+  useEffect(() => {
+    if (status === 'ready' && !localStorage.getItem('ma_seen_shortcuts')) {
+      const t = setTimeout(() => setShowOnboarding(true), 1800);
+      return () => clearTimeout(t);
+    }
+  }, [status]);
 
   // Supabase autosave — debounced 1.5 s, runs in parallel with local persist
   useEffect(() => {
@@ -2016,6 +2068,33 @@ if (dbExports.length > 0) {
                 }`}>{fps} fps</span>
               </div>
             )}
+
+            {/* Keyboard shortcut coach mark — shown once after first track load */}
+            {showOnboarding && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-auto">
+                <div className="flex flex-col gap-2 px-4 py-3 rounded-xl bg-black/80 border border-white/10 backdrop-blur-sm shadow-2xl min-w-[200px]">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-[10px] font-bold tracking-widest uppercase text-white/40">Keyboard shortcuts</span>
+                    <button
+                      onClick={() => { setShowOnboarding(false); localStorage.setItem('ma_seen_shortcuts', '1'); }}
+                      className="text-white/30 hover:text-white/70 transition-colors ml-3">
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                  {[
+                    { key: 'Space / K', label: 'Play · Pause' },
+                    { key: '← →',       label: 'Seek ±5 seconds' },
+                    { key: 'M',          label: 'Mute toggle' },
+                    { key: 'Esc',        label: 'Stop playback' },
+                  ].map(({ key, label }) => (
+                    <div key={key} className="flex items-center justify-between gap-4">
+                      <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-white/70 border border-white/10">{key}</kbd>
+                      <span className="text-[10px] text-white/50">{label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
  
           {/* Sign-in nudge — shown once to anonymous users after audio loads */}
@@ -2059,9 +2138,37 @@ if (dbExports.length > 0) {
                   const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
                   seek(((e.clientX - rect.left) / rect.width) * project.duration);
                 }}>
-                <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-white/10 rounded-full" />
-                <div className="absolute top-1/2 -translate-y-1/2 h-1 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full" style={{ width: `${pct}%` }} />
-                <div className="absolute top-1/2 -translate-y-1/2 size-3 -ml-1.5 rounded-full bg-white shadow" style={{ left: `${pct}%` }} />
+                {waveformPoints ? (
+                  /* Waveform visualizer — polygon computed once, only clip rects update per frame */
+                  <svg className="absolute inset-0 w-full h-full" viewBox="0 0 1000 28"
+                    preserveAspectRatio="none" aria-hidden="true">
+                    <defs>
+                      <linearGradient id="wfGrad" x1="0" y1="0" x2="1000" y2="0" gradientUnits="userSpaceOnUse">
+                        <stop offset="0%" stopColor="#a855f7" />
+                        <stop offset="100%" stopColor="#ec4899" />
+                      </linearGradient>
+                      <clipPath id="wfPlayed">
+                        <rect x="0" y="0" width={pct * 10} height="28" />
+                      </clipPath>
+                      <clipPath id="wfUnplayed">
+                        <rect x={pct * 10} y="0" width={1000 - pct * 10} height="28" />
+                      </clipPath>
+                    </defs>
+                    {/* Unplayed portion — dim white */}
+                    <polygon points={waveformPoints} fill="rgba(255,255,255,0.10)" clipPath="url(#wfUnplayed)" />
+                    {/* Played portion — brand gradient */}
+                    <polygon points={waveformPoints} fill="url(#wfGrad)" opacity="0.80" clipPath="url(#wfPlayed)" />
+                  </svg>
+                ) : (
+                  /* Fallback plain bar when no track loaded */
+                  <>
+                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-white/10 rounded-full" />
+                    <div className="absolute top-1/2 -translate-y-1/2 h-1 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full" style={{ width: `${pct}%` }} />
+                  </>
+                )}
+                {/* Playhead thumb */}
+                <div className="absolute top-1/2 -translate-y-1/2 size-3 -ml-1.5 rounded-full bg-white shadow-lg"
+                  style={{ left: `${pct}%` }} />
               </div>
             </div>
           </div>
@@ -2323,9 +2430,13 @@ if (dbExports.length > 0) {
                             onChange={(e) => {
                               const newColors = [...PALETTES[palette].colors] as [string,string,string];
                               newColors[slot] = e.target.value;
-                              // Patch the active palette in-place (mutable for session only)
                               PALETTES[palette] = { ...PALETTES[palette], colors: newColors };
-                              // Force a re-render
+                              // Persist custom colours to localStorage
+                              try {
+                                const saved = JSON.parse(localStorage.getItem('ma_custom_palettes') || '{}');
+                                saved[palette] = newColors;
+                                localStorage.setItem('ma_custom_palettes', JSON.stringify(saved));
+                              } catch { /* ignore */ }
                               paletteRef.current = palette;
                               setPalette(palette);
                             }}
@@ -2343,12 +2454,20 @@ if (dbExports.length > 0) {
                         ['#ffffff','#9ca3af','#4b5563'],
                       ];
                       PALETTES[palette] = { name: PALETTES[palette].name, colors: defaults[palette % 4] };
+                      // Clear persisted custom colours for this palette
+                      try {
+                        const saved = JSON.parse(localStorage.getItem('ma_custom_palettes') || '{}');
+                        delete saved[palette];
+                        Object.keys(saved).length > 0
+                          ? localStorage.setItem('ma_custom_palettes', JSON.stringify(saved))
+                          : localStorage.removeItem('ma_custom_palettes');
+                      } catch { /* ignore */ }
                       setPalette(p => p);
                     }} className="ml-auto text-[10px] text-gray-500 hover:text-gray-300 underline">
                       Reset
                     </button>
                   </div>
-                  <p className="text-[10px] text-gray-600 mt-2">Click a swatch to pick a custom colour for that slot.</p>
+                  <p className="text-[10px] text-gray-600 mt-2">Click a swatch to pick a custom colour. Changes are saved automatically.</p>
                 </div>
               </TabsContent>
  
