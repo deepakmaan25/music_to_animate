@@ -156,7 +156,7 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
     }, 1000);
   };
 
-  // ── Step: email — check if account exists, route accordingly ───────────────
+  // ── Step: email — detect account existence WITHOUT sending any email ──────
   const handleEmailContinue = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || loading) return;
@@ -164,31 +164,30 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
     setLoading(true);
 
     try {
-      // Attempt a silent OTP send with shouldCreateUser:false.
-      // If the user exists → no error → go to password step.
-      // If the user doesn't exist → Supabase returns an error → go to signup.
-      // This does NOT actually send an email — we only use the error to detect existence.
-      const { error: checkError } = await supabase.auth.signInWithOtp({
+      // Sign in with a deliberately wrong password — this tells us:
+      //   "Invalid login credentials" → user EXISTS → show password step
+      //   "Email not confirmed"       → user EXISTS → show password step
+      //   "User not found" / similar  → user DOESN'T EXIST → show signup
+      // No email is sent in any case.
+      const { error: checkError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
-        options: { shouldCreateUser: false },
+        password: '\x00__probe__\x00',  // guaranteed wrong, no email sent
       });
 
       if (checkError) {
         const msg = checkError.message.toLowerCase();
-        if (msg.includes('not found') || msg.includes('no user') || msg.includes('signup')) {
-          // New user — go straight to signup
-          setStep('signup');
-        } else {
-          // Existing user — go to password
-          setStep('password');
-        }
+        const userExists =
+          msg.includes('invalid login') ||
+          msg.includes('invalid credentials') ||
+          msg.includes('email not confirmed') ||
+          msg.includes('too many');
+        setStep(userExists ? 'password' : 'signup');
       } else {
-        // Existing user — OTP was sent (costs 1 email), go to password
-        // but also offer the OTP they just received
+        // Extremely unlikely (would mean the probe password matched)
         setStep('password');
       }
     } catch {
-      // Fallback: just go to password step
+      // Network error or unexpected — default to password step (safe fallback)
       setStep('password');
     } finally {
       setLoading(false);
@@ -417,17 +416,17 @@ export function AuthModal({ open, onClose }: { open: boolean; onClose: () => voi
                     </Button>
                   </form>
 
-                  {/* Always show the same small text links — no conditional */}
-                  <div className="flex items-center justify-between mt-4 pt-3 border-t text-xs"
+                  {/* Bottom links — 10px, all on one line */}
+                  <div className="flex items-center justify-between mt-4 pt-3 border-t"
                     style={{ borderColor: 'var(--surface-glass-border)', color: 'var(--text-muted)' }}>
                     <button onClick={() => { setStep('signup'); setPassword(''); setConfirm(''); setError(null); }}
-                      className="hover:underline">New user? Create account</button>
-                    <div className="flex items-center gap-3">
+                      className="text-[10px] hover:underline whitespace-nowrap">New user? Create account</button>
+                    <div className="flex items-center gap-2">
                       <button onClick={handleForgotPassword} disabled={loading}
-                        className="hover:underline disabled:opacity-40">Forgot password?</button>
-                      <span style={{ color: 'var(--surface-glass-border)' }}>·</span>
+                        className="text-[10px] hover:underline disabled:opacity-40 whitespace-nowrap">Forgot password?</button>
+                      <span className="text-[10px]" style={{ color: 'var(--surface-glass-border)' }}>·</span>
                       <button onClick={handleSendOtp} disabled={loading}
-                        className="hover:underline disabled:opacity-40">Use a code</button>
+                        className="text-[10px] hover:underline disabled:opacity-40 whitespace-nowrap">Use a code</button>
                     </div>
                   </div>
                 </motion.div>
