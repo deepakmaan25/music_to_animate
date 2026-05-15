@@ -120,25 +120,30 @@ const VARIANTS: Partial<Record<EngineId, { id: string; label: string; descriptio
     { id: 'aurora',   label: 'Aurora',   description: 'Layered horizontal ribbon curtains (default)' },
     { id: 'vertical', label: 'Vertical', description: 'Vertical ribbon columns — like a visualizer waterfall' },
     { id: 'spiral',   label: 'Spiral',   description: 'Vanishing-point rings collapse inward like a tunnel' },
+    { id: 'wave',     label: 'Wave',     description: 'Concentric sine waves ripple outward from centre' },
   ],
   solar: [
     { id: 'circle', label: 'Circle',  description: 'Smooth circular expanding rings (default)' },
     { id: 'hex',    label: 'Hex',     description: 'Hexagonal rings on every beat' },
     { id: 'square', label: 'Square',  description: 'Square rings that rotate on beat' },
+    { id: 'nova',   label: 'Nova',    description: 'Starburst spikes + rings detonate on every drop' },
   ],
   terrain: [
     { id: 'wireframe', label: 'Wireframe', description: 'Mesh grid lines (default)' },
     { id: 'solid',     label: 'Solid',     description: 'Filled terrain with coloured horizon' },
     { id: 'grid',      label: 'Grid',      description: 'Top-down frequency grid — cells pulse per band' },
+    { id: 'ocean',     label: 'Ocean',     description: 'Rolling fluid waves — amplitude tied to bass' },
   ],
   neon_spheres: [
     { id: 'float',  label: 'Float',  description: 'Freeform drifting spheres (default)' },
     { id: 'orbit',  label: 'Orbit',  description: 'Spheres orbit a central glow point' },
     { id: 'burst',  label: 'Burst',  description: 'All spheres explode from centre on every beat' },
+    { id: 'ring',   label: 'Ring',   description: 'Spheres locked in a rotating ring formation' },
   ],
   fractal: [
     { id: 'kaleidoscope', label: 'Kaleidoscope', description: 'Mirrored radial burst lines (default)' },
     { id: 'mandala',      label: 'Mandala',      description: 'Petal-shaped organic bloom, beat-reactive' },
+    { id: 'crystal',      label: 'Crystal',      description: 'Angular shards refract and rotate with the beat' },
   ],
 };
 
@@ -171,11 +176,17 @@ function avg(arr: Uint8Array, start: number, end: number) {
   return (s / Math.max(1, e - start)) / 255;
 }
 
-function hexToRgb(hex: string) {
+function hexToRgb(hex: string, cache?: Map<string,string>) {
+  if (cache) {
+    const hit = cache.get(hex);
+    if (hit) return hit;
+  }
   const m = hex.replace('#', '');
   const v = m.length === 3 ? m.split('').map((c) => c + c).join('') : m;
   const n = parseInt(v, 16);
-  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+  const result = `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+  cache?.set(hex, result);
+  return result;
 }
 
 /**
@@ -291,6 +302,13 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const lowFpsWindowsRef = useRef(0);  // consecutive 500ms windows with fps < 30
   const isDraggingSeekRef = useRef(false);
   const freqBufRef = useRef<Uint8Array | null>(null);   // reused every frame — avoids GC pressure
+  // ── Perf: cached per-frame values to avoid redundant computation ──────────
+  const ctxRef            = useRef<CanvasRenderingContext2D | null>(null); // cached canvas context
+  const liveColorsRef     = useRef<[string,string,string]>(['#8b5cf6','#ec4899','#f59e0b']);
+  const prevSectionIntRef = useRef(-1);  // track sectionIntensity changes for liveColors cache
+  const prevPalRef        = useRef(-1);  // track palette changes for liveColors cache
+  const rgbCache          = useRef<Map<string,string>>(new Map()); // hex → 'r,g,b' string cache
+  const currentTimeRef    = useRef(0);   // replaces per-frame setCurrentTime React re-render
   const audioCtxRef  = useRef<AudioContext | null>(null);
   const analyserRef  = useRef<AnalyserNode | null>(null);
   const gainRef      = useRef<GainNode | null>(null);
@@ -369,7 +387,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     // Capture current frame for crossfade before the engine switches
     const canvas = canvasRef.current;
     if (canvas) {
-      const ctx = canvas.getContext('2d');
+      const ctx = ctxRef.current ?? canvas.getContext('2d');
       if (ctx) {
         try { crossfadeRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height); } catch { /* ignore */ }
         crossfadeAlpha.current = 1;
@@ -502,11 +520,15 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const drawFrame = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    // Cache the 2D context — getContext() is a dictionary lookup every call
+    if (!ctxRef.current || ctxRef.current.canvas !== canvas) {
+      ctxRef.current = canvas.getContext('2d', { alpha: false }) ?? null;
+    }
+    const ctx = ctxRef.current;
     if (!ctx) return;
 
     const eng     = engineRef.current;
-    const vrnt    = variantRef.current;  // active style variant
+    const vrnt    = variantRef.current;
     const pal     = paletteRef.current;
     const sens    = 0.5 + beatSensRef.current * 1.5;
     const perf    = perfModeRef.current;
@@ -514,12 +536,10 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     const bResp   = beatResponseRef.current;
     const colors  = PALETTES[pal].colors;
     const w = canvas.width, h = canvas.height;
+    const hxCache = rgbCache.current;
 
-    // Background
-    const bg = ctx.createLinearGradient(0, 0, w, h);
-    bg.addColorStop(0, 'rgba(10,10,15,1)');
-    bg.addColorStop(1, 'rgba(20,20,30,1)');
-    ctx.fillStyle = bg;
+    // Solid background — no gradient object allocation (visually identical)
+    ctx.fillStyle = 'rgb(12,12,18)';
     ctx.fillRect(0, 0, w, h);
 
     const analyser = analyserRef.current;
@@ -601,8 +621,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     // ─────────────────────────────────────────────────────────────────────
 
     // ── Section-reactive colours ──────────────────────────────────────────
-    // Boosts saturation at drops, mutes at breakdowns — applied to all engines
-    const liveColors = colors.map(c => shiftColorIntensity(c, sectionIntensity)) as [string, string, string];
+    // Recompute ONLY when palette or sectionIntensity changes — not every frame
+    if (pal !== prevPalRef.current || sectionIntensity !== prevSectionIntRef.current) {
+      prevPalRef.current        = pal;
+      prevSectionIntRef.current = sectionIntensity;
+      liveColorsRef.current = colors.map(c => shiftColorIntensity(c, sectionIntensity)) as [string,string,string];
+      rgbCache.current.clear(); // palette changed → invalidate RGB cache
+    }
+    const liveColors = liveColorsRef.current;
 
     // Throttled React state update for the overlay (not every frame)
     const now2 = Date.now();
@@ -646,7 +672,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const tdData = new Uint8Array(analyser.frequencyBinCount * 2);
       analyser.getByteTimeDomainData(tdData);
       ctx.save();
-      ctx.strokeStyle = `rgba(${hexToRgb(liveColors[1])}, 0.18)`;
+      ctx.strokeStyle = `rgba(${hexToRgb(liveColors[1], hxCache)}, 0.18)`;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       for (let i = 0; i < tdData.length; i++) {
@@ -662,13 +688,12 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         for (let i = 0; i < numBars; i++) {
           const v  = (freq[i * step] / 255) * sens * energyMult;
           const bh = v * h * 0.72 * (0.4 + sectionIntensity * 0.6);
-          const grad = ctx.createLinearGradient(0, h - bh, 0, h);
-          grad.addColorStop(0, liveColors[0]);
-          grad.addColorStop(0.5, liveColors[1]);
-          grad.addColorStop(1, liveColors[2]);
-          ctx.fillStyle = grad;
+          // Use index-based color cycle instead of per-bar gradient (saves 80 gradient allocs/frame)
+          ctx.fillStyle = liveColors[i % liveColors.length];
+          ctx.globalAlpha = 0.55 + v * 0.45;
           ctx.fillRect(i * barW + 1, h - bh, barW - 2, bh);
         }
+        ctx.globalAlpha = 1;
       } else if (vrnt === 'wave') {
         // ── Wave: smooth filled frequency curve ─────────────────────────
         const pts: [number, number][] = [];
@@ -681,7 +706,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const grad = ctx.createLinearGradient(0, 0, 0, h);
         grad.addColorStop(0, liveColors[0]);
         grad.addColorStop(0.5, liveColors[1]);
-        grad.addColorStop(1, `rgba(${hexToRgb(liveColors[2])}, 0.2)`);
+        grad.addColorStop(1, `rgba(${hexToRgb(liveColors[2], hxCache)}, 0.2)`);
         ctx.strokeStyle = liveColors[0];
         ctx.lineWidth = 2.5;
         ctx.shadowColor = liveColors[0];
@@ -788,7 +813,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       // Shared core glow
       const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 1.5);
       coreGrad.addColorStop(0, liveColors[0]);
-      coreGrad.addColorStop(0.5, `rgba(${hexToRgb(liveColors[1])}, 0.4)`);
+      coreGrad.addColorStop(0.5, `rgba(${hexToRgb(liveColors[1], hxCache)}, 0.4)`);
       coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = coreGrad;
       ctx.beginPath(); ctx.arc(cx, cy, coreR * 1.5, 0, Math.PI * 2); ctx.fill();
@@ -868,12 +893,11 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           const angle = (i / bars) * Math.PI * 2;
           const x1 = cx + Math.cos(angle) * baseR, y1 = cy + Math.sin(angle) * baseR;
           const x2 = cx + Math.cos(angle) * len,   y2 = cy + Math.sin(angle) * len;
-          const grad = ctx.createLinearGradient(x1, y1, x2, y2);
-          grad.addColorStop(0, liveColors[0]);
-          grad.addColorStop(0.5, liveColors[1]);
-          grad.addColorStop(1, liveColors[2]);
-          ctx.strokeStyle = grad; ctx.lineWidth = 1.5 + v * 2; ctx.lineCap = 'round';
-          ctx.shadowColor = liveColors[1]; ctx.shadowBlur = 4 + v * 12;
+          // Color cycles across palette instead of per-spoke gradient
+          const spokeColor = liveColors[Math.floor(i / bars * liveColors.length) % liveColors.length];
+          ctx.strokeStyle = spokeColor; ctx.lineWidth = 1.5 + v * 2; ctx.lineCap = 'round';
+          ctx.shadowColor = spokeColor; ctx.shadowBlur = 4 + v * 12;
+          ctx.globalAlpha = 0.5 + v * 0.5;
           ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
         }
         ctx.shadowBlur = 0;
@@ -1209,8 +1233,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         // Galactic core glow
         const coreSize = Math.min(w, h) * (0.055 + bass * 0.05 * sens * (0.7 + sectionIntensity * 0.3));
         const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreSize * 3.5);
-        coreGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[0])}, ${0.9 + burst * 0.1})`);
-        coreGrad.addColorStop(0.35, `rgba(${hexToRgb(liveColors[1])}, 0.35)`);
+        coreGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[0], hxCache)}, ${0.9 + burst * 0.1})`);
+        coreGrad.addColorStop(0.35, `rgba(${hexToRgb(liveColors[1], hxCache)}, 0.35)`);
         coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = coreGrad;
         ctx.beginPath(); ctx.arc(cx, cy, coreSize * 3.5, 0, Math.PI * 2); ctx.fill();
@@ -1285,8 +1309,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
       // Sky gradient
       const sky = ctx.createLinearGradient(0, 0, 0, horizon);
-      sky.addColorStop(0, `rgba(${hexToRgb(liveColors[0])}, ${0.18 + highs * 0.4})`);
-      sky.addColorStop(0.6, `rgba(${hexToRgb(liveColors[1])}, ${0.04 + bass * 0.12})`);
+      sky.addColorStop(0, `rgba(${hexToRgb(liveColors[0], hxCache)}, ${0.18 + highs * 0.4})`);
+      sky.addColorStop(0.6, `rgba(${hexToRgb(liveColors[1], hxCache)}, ${0.04 + bass * 0.12})`);
       sky.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = sky; ctx.fillRect(0, 0, w, horizon);
 
@@ -1297,8 +1321,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         // ── Solid: filled terrain polygons with gradient sky ─────────────
         // Sky gradient above horizon
         const skyGrad = ctx.createLinearGradient(0, 0, 0, horizon);
-        skyGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[0])}, ${0.35 + highs * 0.45})`);
-        skyGrad.addColorStop(0.7, `rgba(${hexToRgb(liveColors[1])}, ${0.08 + bass * 0.15})`);
+        skyGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[0], hxCache)}, ${0.35 + highs * 0.45})`);
+        skyGrad.addColorStop(0.7, `rgba(${hexToRgb(liveColors[1], hxCache)}, ${0.08 + bass * 0.15})`);
         skyGrad.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = skyGrad; ctx.fillRect(0, 0, w, horizon);
 
@@ -1324,8 +1348,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           // Filled polygon
           const fillGrad = ctx.createLinearGradient(0, yPersp - 200, 0, yPerspNext);
           const depth = 1 - t;
-          fillGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[r % liveColors.length])}, ${0.55 + depth * 0.3})`);
-          fillGrad.addColorStop(1, `rgba(${hexToRgb(liveColors[(r + 1) % liveColors.length])}, ${0.2 + depth * 0.2})`);
+          fillGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[r % liveColors.length], hxCache)}, ${0.55 + depth * 0.3})`);
+          fillGrad.addColorStop(1, `rgba(${hexToRgb(liveColors[(r + 1, hxCache) % liveColors.length])}, ${0.2 + depth * 0.2})`);
           ctx.fillStyle = fillGrad;
           ctx.beginPath();
           ctx.moveTo(0, yPerspNext);
@@ -1335,7 +1359,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           ctx.fill();
 
           // Bright edge line on top
-          ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % liveColors.length])}, ${0.5 + scale * 0.4})`;
+          ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % liveColors.length], hxCache)}, ${0.5 + scale * 0.4})`;
           ctx.lineWidth = 1 + scale * 1.5;
           ctx.beginPath();
           topPts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
@@ -1373,9 +1397,68 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
         // Beat flash on entire grid
         if (elevBurst > 0.15) {
-          ctx.fillStyle = `rgba(${hexToRgb(liveColors[0])}, ${elevBurst * 0.08})`;
+          ctx.fillStyle = `rgba(${hexToRgb(liveColors[0], hxCache)}, ${elevBurst * 0.08})`;
           ctx.fillRect(0, 0, w, h);
         }
+      } else if (vrnt === 'ocean') {
+        // ── Ocean: rolling fluid sine-wave surface from a side view ──────
+        const waveRows   = perf ? 6 : 11;
+        const waveSteps  = perf ? 60 : 120;
+        cameraTRef.current += (0.018 + bass * 0.028 * sens) * energyMult;
+        const ot = cameraTRef.current;
+
+        // Draw back-to-front so nearer rows paint over distant ones
+        for (let r = 0; r < waveRows; r++) {
+          const t2      = r / waveRows;
+          const depth   = 1 - t2;                          // 1 = far, 0 = near
+          const yBase   = h * (0.28 + t2 * 0.55);         // rows spread across lower 3/4
+          const freqLo  = Math.floor(t2 * freq.length * 0.45);
+          const bandV   = avg(freq, freqLo, freqLo + 14);
+          const color   = liveColors[r % liveColors.length];
+
+          // Wave amplitude driven by bass + band value
+          const amp = (28 + bandV * 110 * sens + bass * 60 * sens * sectionIntensity)
+                      * (0.35 + t2 * 0.65) * energyMult;
+          const waveFreq  = 2.2 + r * 0.55;
+          const waveSpeed = ot * (0.9 + r * 0.25);
+
+          // Build wave polygon (top edge + flat bottom)
+          ctx.beginPath();
+          const pts: [number, number][] = [];
+          for (let s = 0; s <= waveSteps; s++) {
+            const x = (s / waveSteps) * w;
+            const phase1 = (s / waveSteps) * Math.PI * 2 * waveFreq + waveSpeed;
+            const phase2 = (s / waveSteps) * Math.PI * 2 * (waveFreq * 0.5) + waveSpeed * 1.4;
+            const y = yBase
+              - Math.sin(phase1) * amp
+              - Math.sin(phase2) * amp * 0.38
+              - elevBurst * 55 * (0.3 + t2 * 0.7);        // beat surge lifts all rows
+            pts.push([x, y]);
+          }
+          // Polygon: top wave + bottom fill
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          pts.forEach(([x, y]) => ctx.lineTo(x, y));
+          ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
+
+          // Gradient fill from wave-top to ocean floor
+          const wGrad = ctx.createLinearGradient(0, yBase - amp, 0, h);
+          wGrad.addColorStop(0,   `rgba(${hexToRgb(color, hxCache)}, ${(0.25 + bandV * 0.35) * (0.4 + sectionIntensity * 0.6)})`);
+          wGrad.addColorStop(0.5, `rgba(${hexToRgb(color, hxCache)}, ${0.08 * depth})`);
+          wGrad.addColorStop(1,   'rgba(0,0,0,0)');
+          ctx.fillStyle   = wGrad;
+          ctx.globalAlpha = 0.55 + depth * 0.45;
+          ctx.fill();
+
+          // Bright foam edge
+          ctx.beginPath();
+          pts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = 1.2 + bandV * 4.5 * (0.5 + sectionIntensity * 0.5);
+          ctx.globalAlpha = 0.45 + bandV * 0.55;
+          ctx.shadowColor = color; ctx.shadowBlur = 8 + bandV * 22;
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
       } else {
         // ── Wireframe (default): mesh grid lines ─────────────────────────
         for (let r = 0; r < rows; r++) {
@@ -1384,7 +1467,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           const scale  = Math.pow(t, 1.3);
           const fogFactor = Math.max(0, 1 - t * 2.2);
           const alpha = (0.1 + scale * 0.8) * (1 - fogFactor * 0.75);
-          ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % liveColors.length])}, ${alpha})`;
+          ctx.strokeStyle = `rgba(${hexToRgb(liveColors[r % liveColors.length], hxCache)}, ${alpha})`;
           ctx.lineWidth = 0.5 + scale * 1.8;
           ctx.beginPath();
           for (let c = 0; c <= cols; c++) {
@@ -1404,7 +1487,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       // Atmospheric fog
       const fog = ctx.createLinearGradient(0, horizon - 30, 0, horizon + 55);
       fog.addColorStop(0, 'rgba(3,3,12,0)');
-      fog.addColorStop(0.4, `rgba(${hexToRgb(liveColors[0])}, ${0.06 + bass * 0.08})`);
+      fog.addColorStop(0.4, `rgba(${hexToRgb(liveColors[0], hxCache)}, ${0.06 + bass * 0.08})`);
       fog.addColorStop(1, 'rgba(3,3,12,0.35)');
       ctx.fillStyle = fog; ctx.fillRect(0, horizon - 30, w, 85);
 
@@ -1445,10 +1528,10 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
           // Vertical gradient (fades at top and bottom)
           const vgrad = ctx.createLinearGradient(0, 0, 0, h);
-          vgrad.addColorStop(0,   `rgba(${hexToRgb(color)}, 0)`);
+          vgrad.addColorStop(0,   `rgba(${hexToRgb(color, hxCache)}, 0)`);
           vgrad.addColorStop(0.2, color);
           vgrad.addColorStop(0.8, color);
-          vgrad.addColorStop(1,   `rgba(${hexToRgb(color)}, 0)`);
+          vgrad.addColorStop(1,   `rgba(${hexToRgb(color, hxCache)}, 0)`);
           ctx.strokeStyle = vgrad;
           ctx.lineWidth = 2 + bandVal * 14 * (0.5 + sectionIntensity * 0.5);
           ctx.lineCap = 'round';
@@ -1517,6 +1600,55 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.beginPath(); ctx.arc(cx2, h/2, Math.min(w,h)*0.12*(1+burst*0.6), 0, Math.PI*2); ctx.fill();
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 
+      } else if (vrnt === 'wave') {
+        // ── Wave: concentric sine rings ripple outward from centre ────────
+        const waveN   = perf ? 10 : 18;
+        tunnelTRef.current += (0.014 + mids * 0.018 * sens) * energyMult;
+        const wt = tunnelTRef.current;
+        const cxw = w / 2, cyw = h / 2;
+
+        for (let i = 0; i < waveN; i++) {
+          // Each ring: radius grows with time, creating a ripple-outward feel
+          const phase   = (i / waveN + wt * 0.14) % 1;
+          const radius  = phase * Math.min(w, h) * 0.62;
+          const bandIdx = Math.min(Math.floor(phase * freq.length * 0.55), freq.length - 1);
+          const bandV   = (freq[bandIdx] / 255) * sens;
+          const color   = liveColors[i % liveColors.length];
+          const alpha   = (1 - phase) * (0.4 + bandV * 0.6) * (0.4 + sectionIntensity * 0.6);
+
+          // Distorted ellipse — sine-warp around perimeter gives "wave" feel
+          const steps = perf ? 48 : 96;
+          ctx.beginPath();
+          for (let s = 0; s <= steps; s++) {
+            const angle  = (s / steps) * Math.PI * 2;
+            const warp   = 1 + Math.sin(angle * 3 + wt * 2.8) * bandV * 0.22
+                             + Math.sin(angle * 5 - wt * 1.6) * bandV * 0.12;
+            const rx = cxw + Math.cos(angle) * radius * warp;
+            const ry = cyw + Math.sin(angle) * radius * warp * (0.62 + phase * 0.38);
+            s === 0 ? ctx.moveTo(rx, ry) : ctx.lineTo(rx, ry);
+          }
+          ctx.closePath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = (0.8 + bandV * 4.5 + (1 - phase) * 2) * (0.5 + sectionIntensity * 0.5);
+          ctx.globalAlpha = alpha;
+          ctx.shadowColor = color; ctx.shadowBlur = 6 + bandV * 22;
+          ctx.stroke();
+          // Semi-transparent fill bloom on inner rings
+          if (phase < 0.35) {
+            ctx.fillStyle   = color;
+            ctx.globalAlpha = alpha * 0.09;
+            ctx.shadowBlur  = 0;
+            ctx.fill();
+          }
+        }
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        // Centre glow
+        const wvGrad = ctx.createRadialGradient(cxw, cyw, 0, cxw, cyw, Math.min(w,h) * 0.10 * (1 + burst * 0.5));
+        wvGrad.addColorStop(0, liveColors[0]); wvGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = wvGrad; ctx.globalAlpha = 0.6 + burst * 0.4;
+        ctx.beginPath(); ctx.arc(cxw, cyw, Math.min(w,h) * 0.10 * (1 + burst * 0.5), 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
+
       } else {
         // ── Aurora (default): horizontal ribbons ─────────────────────────
         for (let ri = 0; ri < numRibbons; ri++) {
@@ -1535,10 +1667,10 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           ctx.shadowColor = color; ctx.shadowBlur = 18 + bandVal * 40;
 
           const grad = ctx.createLinearGradient(0, 0, w, 0);
-          grad.addColorStop(0,   `rgba(${hexToRgb(color)}, 0)`);
+          grad.addColorStop(0,   `rgba(${hexToRgb(color, hxCache)}, 0)`);
           grad.addColorStop(0.2, color);
           grad.addColorStop(0.8, color);
-          grad.addColorStop(1,   `rgba(${hexToRgb(color)}, 0)`);
+          grad.addColorStop(1,   `rgba(${hexToRgb(color, hxCache)}, 0)`);
           ctx.strokeStyle = grad;
           ctx.lineWidth = 2 + bandVal * 12 * (0.5 + sectionIntensity * 0.5);
           ctx.lineCap = 'round';
@@ -1644,6 +1776,13 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           sp.y += dy * 0.008;
           sp.x = Math.max(0.04, Math.min(0.96, sp.x));
           sp.y = Math.max(0.04, Math.min(0.96, sp.y));
+        } else if (vrnt === 'ring') {
+          // Ring: all spheres equally spaced in a rotating ring formation
+          const ringR     = 0.22 + be * 0.06 * (0.6 + sectionIntensity * 0.4);
+          const ringAngle = (i / N) * Math.PI * 2 + solarTRef.current * 0.55;
+          sp.x = 0.5 + Math.cos(ringAngle) * ringR;
+          sp.y = 0.5 + Math.sin(ringAngle) * ringR * 0.62; // slight ellipse for depth
+          sp.phase += baseMotion * 0.5;
         } else {
           // Float (default): freeform drift
           const driftSpeed = baseMotion * 0.03;
@@ -1668,7 +1807,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         const g = ctx.createRadialGradient(sx - r * 0.3, sy - r * 0.3, 0, sx, sy, r * 1.8);
         g.addColorStop(0, '#ffffff');
         g.addColorStop(0.15, color);
-        g.addColorStop(0.5, `rgba(${hexToRgb(color)}, 0.5)`);
+        g.addColorStop(0.5, `rgba(${hexToRgb(color, hxCache)}, 0.5)`);
         g.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.globalAlpha = (0.65 + be * 0.35) * (0.7 + sectionIntensity * 0.3);
         ctx.fillStyle   = g;
@@ -1768,6 +1907,66 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.restore();
         ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 
+      } else if (vrnt === 'crystal') {
+        // ── Crystal: angular shards refract and rotate with the beat ─────
+        const shardN = perf ? 8 : 14;
+        const cRot   = solarTRef.current * 0.14;
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        for (let s = 0; s < shardN; s++) {
+          const baseAngle = (s / shardN) * Math.PI * 2 + cRot;
+          const freqIdx   = Math.min(Math.floor((s / shardN) * freq.length * 0.6), freq.length - 1);
+          const v         = (freq[freqIdx] / 255) * sens;
+          const color     = liveColors[s % liveColors.length];
+          const len       = Math.min(w, h) * (0.10 + v * 0.30 * (0.5 + sectionIntensity * 0.5));
+          const width     = Math.min(w, h) * (0.028 + v * 0.038);
+          // Mirror each shard
+          for (const flip of [1, -1]) {
+            const ang = baseAngle * flip;
+            // Shard tip and base points
+            const tx = Math.cos(ang) * len;
+            const ty = Math.sin(ang) * len;
+            const bx1 = Math.cos(ang + Math.PI / 2) * width;
+            const by1 = Math.sin(ang + Math.PI / 2) * width;
+            const bx2 = Math.cos(ang - Math.PI / 2) * width;
+            const by2 = Math.sin(ang - Math.PI / 2) * width;
+            // Facet: triangle shard
+            const sGrad = ctx.createLinearGradient(0, 0, tx, ty);
+            sGrad.addColorStop(0,   `rgba(${hexToRgb(color, hxCache)}, ${0.08 + v * 0.12})`);
+            sGrad.addColorStop(0.6, `rgba(${hexToRgb(color, hxCache)}, ${0.25 + v * 0.35})`);
+            sGrad.addColorStop(1,   `rgba(${hexToRgb(color, hxCache)}, ${0.04})`);
+            ctx.fillStyle   = sGrad;
+            ctx.globalAlpha = 0.55 + v * 0.45;
+            ctx.shadowColor = color; ctx.shadowBlur = 6 + v * 18;
+            ctx.beginPath();
+            ctx.moveTo(bx1, by1); ctx.lineTo(tx, ty); ctx.lineTo(bx2, by2); ctx.closePath();
+            ctx.fill();
+            // Bright edge
+            ctx.strokeStyle = color;
+            ctx.lineWidth   = 0.8 + v * 3;
+            ctx.globalAlpha = 0.4 + v * 0.6;
+            ctx.shadowBlur  = 3 + v * 12;
+            ctx.stroke();
+          }
+        }
+        // Centre refraction gem
+        const gemR = Math.min(w, h) * 0.042 * (1 + bass * sens * 0.5);
+        const gemN = 6;
+        ctx.strokeStyle = liveColors[0];
+        ctx.lineWidth   = 1.5 + bass * 3 * sens;
+        ctx.globalAlpha = 0.8 + bass * 0.2;
+        ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 14 + bass * 20 * sens;
+        ctx.beginPath();
+        for (let g = 0; g <= gemN; g++) {
+          const a = (g / gemN) * Math.PI * 2 + cRot * 2;
+          g === 0 ? ctx.moveTo(Math.cos(a) * gemR, Math.sin(a) * gemR)
+                  : ctx.lineTo(Math.cos(a) * gemR, Math.sin(a) * gemR);
+        }
+        ctx.stroke();
+        ctx.restore();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
       } else {
         // ── Kaleidoscope (default): mirrored radial burst lines ──────────
         const zoom = Math.min(1.22, 1 + bass * sens * 0.35 * sectionIntensity);
@@ -1839,14 +2038,100 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       };
 
       // ── 1. Background ─────────────────────────────────────────────
+      if (vrnt === 'nova') {
+        // ── Nova: starburst spikes + rings detonate on every drop ────────
+        ctx.fillStyle = `rgba(2,2,10,${0.26 + (1 - sectionIntensity) * 0.10})`;
+        ctx.fillRect(0, 0, w, h);
+
+        // Spawn nova burst on strong beat
+        if (geoOnset > 0.048 && planetsRef.current.length < 24) {
+          const spikeN = perf ? 8 : 14;
+          planetsRef.current.push({ type: 'nova', r: minDim * 0.04,
+            maxR: minDim * (0.38 + geoOnset * 0.42) * (0.6 + sectionIntensity * 0.4),
+            alpha: Math.min(1, 0.6 + geoOnset * 1.8), colorIdx: Math.floor(Math.random() * liveColors.length),
+            spikeN, rot: t * 0.1, thickness: 2 + geoOnset * 7 } as any);
+          // Particle burst
+          const pN = perf ? 8 : 18;
+          for (let p = 0; p < pN && (sparksRef.current as any[]).length < 140; p++) {
+            const ang = Math.random() * Math.PI * 2;
+            const spd = (3 + Math.random() * 5 + geoOnset * 5) * (0.5 + sectionIntensity * 0.5);
+            (sparksRef.current as any[]).push({ x: cx, y: cy, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
+              life: 0.9 + Math.random() * 0.1, colorIdx: Math.floor(Math.random() * liveColors.length),
+              size: 2 + Math.random() * 3 + geoOnset * 4 });
+          }
+        }
+
+        // Draw nova bursts
+        planetsRef.current = (planetsRef.current as any[]).filter((n: any) => {
+          n.r     += (4 + mids * 8 * sens) * energyMult;
+          n.alpha *= 0.905;
+          if (n.alpha < 0.012 || n.r > n.maxR * 1.2) return false;
+          const color = liveColors[n.colorIdx % liveColors.length];
+          const sN    = n.spikeN ?? 12;
+          ctx.save();
+          ctx.translate(cx, cy);
+          // Ring
+          ctx.strokeStyle = color; ctx.lineWidth = n.thickness * n.alpha * 2.2;
+          ctx.globalAlpha = n.alpha; ctx.shadowColor = color; ctx.shadowBlur = 14 + burst * 22;
+          ctx.beginPath(); ctx.arc(0, 0, n.r, 0, Math.PI * 2); ctx.stroke();
+          // Spikes at ring perimeter
+          for (let k = 0; k < sN; k++) {
+            const ang = (k / sN) * Math.PI * 2 + n.rot;
+            const inner = n.r * 0.88, outer = n.r + minDim * 0.05 * n.alpha;
+            ctx.strokeStyle = color; ctx.lineWidth = 1.2 + n.alpha * 2.5;
+            ctx.globalAlpha = n.alpha * 0.85; ctx.shadowBlur = 8 + n.alpha * 14;
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(ang) * inner, Math.sin(ang) * inner);
+            ctx.lineTo(Math.cos(ang) * outer, Math.sin(ang) * outer);
+            ctx.stroke();
+          }
+          ctx.restore();
+          return true;
+        });
+
+        // Particles
+        sparksRef.current = (sparksRef.current as any[]).filter((p: any) => {
+          p.x += p.vx; p.y += p.vy; p.vx *= 0.960; p.vy *= 0.960; p.life *= 0.932;
+          if (p.life < 0.018) return false;
+          const color = liveColors[p.colorIdx % liveColors.length];
+          ctx.fillStyle = color; ctx.globalAlpha = p.life * (0.55 + sectionIntensity * 0.45);
+          ctx.shadowColor = color; ctx.shadowBlur = p.size * 3;
+          ctx.beginPath(); ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2); ctx.fill();
+          return true;
+        });
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+        // 4 ambient frequency rings (always visible, no beat needed)
+        for (let i = 0; i < 4; i++) {
+          const bandV = avg(freq, i * 18, i * 18 + 18);
+          const r     = minDim * (0.10 + i * 0.078) * (1 + bandV * sens * 0.35);
+          const color = liveColors[i % liveColors.length];
+          ctx.strokeStyle = color; ctx.lineWidth = 1.2 + bandV * 3.5;
+          ctx.globalAlpha = 0.20 + bandV * 0.55;
+          ctx.shadowColor = color; ctx.shadowBlur = 5 + bandV * 18;
+          ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+        // Core
+        const nCoreR = minDim * 0.05 * (1 + burst * 0.6);
+        const nCoreG = ctx.createRadialGradient(cx, cy, 0, cx, cy, nCoreR);
+        nCoreG.addColorStop(0, '#ffffff'); nCoreG.addColorStop(0.3, liveColors[0]); nCoreG.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = nCoreG; ctx.globalAlpha = 0.9 + burst * 0.1;
+        ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 18 + burst * 28;
+        ctx.beginPath(); ctx.arc(cx, cy, nCoreR, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+      } else {
+      // ── 1. Background ─────────────────────────────────────────────
       ctx.fillStyle = `rgba(2,2,10,${0.32 + (1 - sectionIntensity) * 0.10})`;
       ctx.fillRect(0, 0, w, h);
 
       // Ambient pulse — wide, very transparent radial bloom
       const ambR   = minDim * (0.58 + burst * 0.14 + currentEnergy * 0.11);
       const ambGrd = ctx.createRadialGradient(cx, cy, 0, cx, cy, ambR);
-      ambGrd.addColorStop(0,   `rgba(${hexToRgb(liveColors[1])}, ${0.08 + burst * 0.09})`);
-      ambGrd.addColorStop(0.6, `rgba(${hexToRgb(liveColors[2])}, ${0.03 + sectionIntensity * 0.03})`);
+      ambGrd.addColorStop(0,   `rgba(${hexToRgb(liveColors[1], hxCache)}, ${0.08 + burst * 0.09})`);
+      ambGrd.addColorStop(0.6, `rgba(${hexToRgb(liveColors[2], hxCache)}, ${0.03 + sectionIntensity * 0.03})`);
       ambGrd.addColorStop(1,   'rgba(0,0,0,0)');
       ctx.fillStyle = ambGrd;
       ctx.beginPath(); ctx.arc(cx, cy, ambR, 0, Math.PI * 2); ctx.fill();
@@ -2003,7 +2288,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
             cx + Math.cos(angle) * rayLen,
             cy + Math.sin(angle) * rayLen,
           );
-          grd.addColorStop(0, `rgba(${hexToRgb(color)}, ${(burst - 0.28) * 0.60})`);
+          grd.addColorStop(0, `rgba(${hexToRgb(color, hxCache)}, ${(burst - 0.28) * 0.60})`);
           grd.addColorStop(1, 'rgba(0,0,0,0)');
           ctx.strokeStyle = grd;
           ctx.lineWidth   = 0.8 + burst * 2.8;
@@ -2019,7 +2304,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const coreR = minDim * 0.058 * (1 + burst * 0.55 + bass * sens * 0.28);
       // Wide outer halo
       const haloGrd = ctx.createRadialGradient(cx, cy, coreR * 0.4, cx, cy, coreR * 4.8);
-      haloGrd.addColorStop(0, `rgba(${hexToRgb(liveColors[1])}, ${0.14 + burst * 0.18})`);
+      haloGrd.addColorStop(0, `rgba(${hexToRgb(liveColors[1], hxCache)}, ${0.14 + burst * 0.18})`);
       haloGrd.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = haloGrd;
       ctx.beginPath(); ctx.arc(cx, cy, coreR * 4.8, 0, Math.PI * 2); ctx.fill();
@@ -2027,13 +2312,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const coreGrd = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
       coreGrd.addColorStop(0,    '#ffffff');
       coreGrd.addColorStop(0.22, liveColors[0]);
-      coreGrd.addColorStop(0.62, `rgba(${hexToRgb(liveColors[1])}, 0.55)`);
+      coreGrd.addColorStop(0.62, `rgba(${hexToRgb(liveColors[1], hxCache)}, 0.55)`);
       coreGrd.addColorStop(1,    'rgba(0,0,0,0)');
       ctx.fillStyle = coreGrd;
       ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 20 + burst * 30;
       ctx.globalAlpha = 0.88 + burst * 0.12;
       ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2); ctx.fill();
       ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+      } // end non-nova solar block
     }
 
     // ── Post-processing ───────────────────────────────────────────────────
@@ -2362,11 +2648,17 @@ if (dbExports.length > 0) {
   };
 
   const runVisualizationLoop = () => {
-    const tick = () => {
+    let lastTimeUpdate = 0;
+    const tick = (rafTs: number) => {
       drawFrame();
-      // Only update time display when truly playing (use ref, not stale state)
+      // Throttle React time state to 4× per second — avoids 60 re-renders/sec
       if (audioCtxRef.current && playingRef.current) {
-        setCurrentTime(audioCtxRef.current.currentTime - startedAtRef.current);
+        const t = audioCtxRef.current.currentTime - startedAtRef.current + offsetRef.current;
+        currentTimeRef.current = t;
+        if (rafTs - lastTimeUpdate > 250) {
+          setCurrentTime(t);
+          lastTimeUpdate = rafTs;
+        }
       }
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -2702,11 +2994,11 @@ if (dbExports.length > 0) {
                height: isFullscreen ? '100%' : (
                  // Desktop: no inline height — CSS flex handles it
                  typeof window !== 'undefined' && window.innerWidth >= 1024 ? undefined :
-                 // Mobile fixed heights — INCREASED per request
-                 // 9:16  +40% over old min(50vh,340px) → min(70vh, 476px)
-                 // 1:1   ×2   over old min(60vw,340px) → min(100vw, 520px) — square fills width
-                 // 16:9  ×2   over old min(46vw,300px) → min(92vw, 600px)
-                 aspect === '9:16' ? 'min(70vh, 476px)'
+                 // Mobile fixed heights
+                 // 9:16  reduced by 20% from 70vh/476px
+                 // 1:1   ×2 of original
+                 // 16:9  ×2 of original
+                 aspect === '9:16' ? 'min(56vh, 380px)'
                  : aspect === '1:1' ? 'min(100vw, 520px)'
                  : 'min(92vw, 560px)'
                ),
