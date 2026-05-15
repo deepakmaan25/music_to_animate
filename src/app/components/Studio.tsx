@@ -92,9 +92,10 @@ const ENGINES: { id: EngineId; name: string; description: string; group: '2D' | 
 // ─── Engine style variants ────────────────────────────────────────────────────
 const VARIANTS: Partial<Record<EngineId, { id: string; label: string; description: string }[]>> = {
   bars: [
-    { id: 'mirror',  label: 'Mirror',   description: 'Bars grow from centre outward (default)' },
-    { id: 'classic', label: 'Classic',  description: 'Bars rise from the bottom' },
-    { id: 'wave',    label: 'Wave',     description: 'Smooth filled frequency curve' },
+    { id: 'mirror',        label: 'Mirror',        description: 'Bars grow from centre outward (default)' },
+    { id: 'classic',       label: 'Classic',       description: 'Bars rise from the bottom' },
+    { id: 'wave',          label: 'Wave',          description: 'Smooth filled frequency curve' },
+    { id: 'constellation', label: 'Constellation', description: 'Frequency dots connected by proximity lines' },
   ],
   radial: [
     { id: 'spokes',  label: 'Spokes',   description: 'Bars radiate outward (default)' },
@@ -105,14 +106,14 @@ const VARIANTS: Partial<Record<EngineId, { id: string; label: string; descriptio
     { id: 'starfield', label: 'Starfield', description: 'Flying through a star tunnel (default)' },
     { id: 'nebula',    label: 'Nebula',    description: 'Slow-drifting glowing cloud of particles' },
     { id: 'vortex',    label: 'Vortex',    description: 'Particles spiral inward on every beat' },
+    { id: 'galaxy',    label: 'Galaxy',    description: 'Stars orbit a central core with Keplerian speed' },
+  ],
+  orbital: [
+    { id: 'rings', label: 'Rings', description: 'Tilting concentric rings (default)' },
+    { id: 'helix', label: 'Helix', description: 'Stacked rings twist into a DNA double helix' },
   ],
   tunnel: [
-    { id: 'hex',    label: 'Hex',    description: 'Hexagonal rings (default)' },
-    { id: 'circle', label: 'Circle', description: 'Perfect circle rings' },
-    { id: 'square', label: 'Square', description: 'Square rings with sharp corners' },
-  ],
-  tunnel: [
-    { id: 'aurora',  label: 'Aurora',  description: 'Layered horizontal ribbon curtains (default)' },
+    { id: 'aurora',   label: 'Aurora',   description: 'Layered horizontal ribbon curtains (default)' },
     { id: 'vertical', label: 'Vertical', description: 'Vertical ribbon columns — like a visualizer waterfall' },
   ],
   solar: [
@@ -123,10 +124,15 @@ const VARIANTS: Partial<Record<EngineId, { id: string; label: string; descriptio
   terrain: [
     { id: 'wireframe', label: 'Wireframe', description: 'Mesh grid lines (default)' },
     { id: 'solid',     label: 'Solid',     description: 'Filled terrain with coloured horizon' },
+    { id: 'grid',      label: 'Grid',      description: 'Top-down frequency grid — cells pulse per band' },
   ],
   neon_spheres: [
     { id: 'float',  label: 'Float',  description: 'Freeform drifting spheres (default)' },
     { id: 'orbit',  label: 'Orbit',  description: 'Spheres orbit a central glow point' },
+  ],
+  fractal: [
+    { id: 'kaleidoscope', label: 'Kaleidoscope', description: 'Mirrored radial burst lines (default)' },
+    { id: 'mandala',      label: 'Mandala',      description: 'Petal-shaped organic bloom, beat-reactive' },
   ],
 };
 
@@ -269,6 +275,9 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const fpsLastTimeRef       = useRef(performance.now());
   const [fps, setFps] = useState(0);
   const [showFps, setShowFps] = useState(false);
+  const [showPerfSuggest, setShowPerfSuggest] = useState(false);
+  const lowFpsWindowsRef = useRef(0);  // consecutive 500ms windows with fps < 30
+  const isDraggingSeekRef = useRef(false);
   const audioCtxRef  = useRef<AudioContext | null>(null);
   const analyserRef  = useRef<AnalyserNode | null>(null);
   const gainRef      = useRef<GainNode | null>(null);
@@ -573,7 +582,15 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       // FPS calculation: frames per second over the throttle window
       const elapsed = now2 - fpsLastTimeRef.current;
       if (elapsed > 0) {
-        setFps(Math.round((fpsFramesRef.current / elapsed) * 1000));
+        const measuredFps = Math.round((fpsFramesRef.current / elapsed) * 1000);
+        setFps(measuredFps);
+        // Auto-perf suggestion: 4 consecutive low windows ≈ 2s of sluggish playback
+        if (measuredFps < 30 && playingRef.current && !perfModeRef.current) {
+          lowFpsWindowsRef.current += 1;
+          if (lowFpsWindowsRef.current >= 4) { setShowPerfSuggest(true); lowFpsWindowsRef.current = 0; }
+        } else {
+          lowFpsWindowsRef.current = 0;
+        }
       }
       fpsFramesRef.current = 0;
       fpsLastTimeRef.current = now2;
@@ -657,8 +674,54 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;
+      } else if (vrnt === 'constellation') {
+        // ── Constellation: frequency dots connected by proximity lines ───
+        const numDots = 56;
+        const step2 = Math.floor(freq.length / numDots);
+        const midY2 = h / 2;
+        // Build mirrored dot array
+        const cpts: [number, number, number][] = [];
+        for (let i = 0; i < numDots; i++) {
+          const v = (freq[i * step2] / 255) * sens * energyMult;
+          const x = (i / (numDots - 1)) * w;
+          const amp = v * h * 0.36 * (0.4 + sectionIntensity * 0.6);
+          cpts.push([x, midY2 - amp, v]); // top
+          cpts.push([x, midY2 + amp, v]); // bottom (mirror)
+        }
+        // Draw connecting lines between nearby dots
+        const threshold = w * 0.14;
+        for (let i = 0; i < cpts.length; i++) {
+          for (let j = i + 1; j < cpts.length; j++) {
+            const dx = cpts[j][0] - cpts[i][0];
+            if (Math.abs(dx) > threshold) continue; // fast X-axis reject
+            const dy = cpts[j][1] - cpts[i][1];
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < threshold) {
+              const prox = 1 - dist / threshold;
+              const avgV = (cpts[i][2] + cpts[j][2]) * 0.5;
+              ctx.globalAlpha = prox * prox * avgV * 0.55;
+              ctx.strokeStyle = liveColors[avgV > 0.5 ? 0 : avgV > 0.25 ? 1 : 2];
+              ctx.lineWidth = 0.7 + prox * 1.2;
+              ctx.beginPath(); ctx.moveTo(cpts[i][0], cpts[i][1]); ctx.lineTo(cpts[j][0], cpts[j][1]); ctx.stroke();
+            }
+          }
+        }
+        // Draw glowing star dots
+        for (const [x, y, v] of cpts) {
+          if (v < 0.035) continue;
+          const size = 1.5 + v * 9 * (0.5 + sectionIntensity * 0.5);
+          const color = liveColors[v > 0.6 ? 0 : v > 0.3 ? 1 : 2];
+          ctx.globalAlpha = 0.45 + v * 0.55;
+          ctx.shadowColor = color; ctx.shadowBlur = size * 3.5;
+          ctx.fillStyle = color;
+          ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill();
+        }
+        // Centre line
+        ctx.shadowBlur = 0; ctx.globalAlpha = 0.06;
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(0, midY2); ctx.lineTo(w, midY2); ctx.stroke();
+        ctx.globalAlpha = 1;
       } else {
-        // ── Mirror (default): bars grow from centre ──────────────────────
         const midY = h / 2;
         for (let i = 0; i < numBars; i++) {
           const v = (freq[i * step] / 255) * sens * energyMult;
@@ -761,38 +824,87 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const cx = w / 2, cy = h / 2;
       const bass = avg(freq, 0, 16), mids = avg(freq, 16, 80), highs = avg(freq, 80, 200);
       cameraTRef.current += (0.004 + bass * 0.01 * sens) * energyMult;
-      const tilt = 0.4 + Math.sin(cameraTRef.current * 0.6) * 0.2;
-      const coreR = Math.min(w, h) * 0.07 * (1 + bass * sens * 0.6);
-      const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 3);
-      coreGrad.addColorStop(0, liveColors[0]); coreGrad.addColorStop(0.4, liveColors[1]); coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = coreGrad; ctx.beginPath(); ctx.arc(cx, cy, coreR * 3, 0, Math.PI * 2); ctx.fill();
-      const ringCount = perf ? 3 : 6;
-      for (let r = 0; r < ringCount; r++) {
-        const baseR = Math.min(w, h) * (0.12 + r * 0.07) * (1 + bass * sens * 0.15) * (0.7 + sectionIntensity * 0.3);
-        const thickness = (1.5 + mids * 6 * sens + r * 0.4) * energyMult;
-        const rot = cameraTRef.current * (0.3 + r * 0.1) + r;
-        ctx.save();
-        ctx.translate(cx, cy); ctx.rotate(rot); ctx.scale(1, Math.max(0.15, tilt - r * 0.03));
-        ctx.strokeStyle = liveColors[r % liveColors.length];
-        ctx.globalAlpha = 0.55 + mids * 0.5;
-        ctx.lineWidth = thickness;
-        ctx.beginPath(); ctx.arc(0, 0, baseR, 0, Math.PI * 2); ctx.stroke();
-        ctx.restore();
-        if (highs > 0.55 && Math.random() < 0.3) {
-          sparksRef.current.push({ angle: Math.random() * Math.PI * 2, r: baseR, speed: 0.04 + highs * 0.05, life: 1, ring: r });
+
+      if (vrnt === 'helix') {
+        // ── Helix: stacked rings twist into a DNA double helix ──────────
+        const helixN = perf ? 9 : 16;
+        const bandH  = h / helixN;
+        ctx.shadowBlur = 0;
+        for (let i = 0; i < helixN; i++) {
+          const t2      = i / helixN;
+          const ringCY  = bandH * (i + 0.5);
+          const freqBand = Math.min(Math.floor(t2 * freq.length * 0.55), freq.length - 1);
+          const v       = (freq[freqBand] / 255) * sens;
+          // Phase progresses 1.5 full turns across the stack → helix shape
+          const phase   = t2 * Math.PI * 3;
+          const rot     = cameraTRef.current * 0.65 + phase;
+          const tiltFactor = Math.abs(Math.cos(rot)); // 0 = edge-on, 1 = face-on
+          const baseR   = Math.min(w, h) * 0.19 * (0.65 + sectionIntensity * 0.35) * (0.75 + v * 0.25);
+          const color   = liveColors[i % liveColors.length];
+
+          ctx.save();
+          ctx.translate(cx, ringCY);
+          ctx.scale(1, Math.max(0.05, tiltFactor));
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = (1.5 + v * 5.5) * energyMult;
+          ctx.globalAlpha = 0.25 + v * 0.75;
+          ctx.shadowColor = color; ctx.shadowBlur = (6 + v * 14) * (0.5 + sectionIntensity * 0.5);
+          ctx.beginPath(); ctx.arc(0, 0, baseR, 0, Math.PI * 2); ctx.stroke();
+          ctx.restore();
+
+          // Backbone strand connecting adjacent rings
+          if (i < helixN - 1) {
+            const nextPhase = ((i + 1) / helixN) * Math.PI * 3;
+            const nextRot   = cameraTRef.current * 0.65 + nextPhase;
+            const nextCY    = bandH * (i + 1.5);
+            // Two strands at ±90° phase offset
+            for (const offset of [0, Math.PI]) {
+              const x1 = cx + Math.cos(rot + offset) * baseR;
+              const x2 = cx + Math.cos(nextRot + offset) * baseR;
+              ctx.globalAlpha = 0.12 + v * 0.18;
+              ctx.strokeStyle = color; ctx.lineWidth = 0.9;
+              ctx.shadowBlur = 0;
+              ctx.beginPath(); ctx.moveTo(x1, ringCY); ctx.lineTo(x2, nextCY); ctx.stroke();
+            }
+          }
         }
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+      } else {
+        // ── Rings (default): concentric tilting orbital rings ────────────
+        const tilt = 0.4 + Math.sin(cameraTRef.current * 0.6) * 0.2;
+        const coreR = Math.min(w, h) * 0.07 * (1 + bass * sens * 0.6);
+        const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 3);
+        coreGrad.addColorStop(0, liveColors[0]); coreGrad.addColorStop(0.4, liveColors[1]); coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = coreGrad; ctx.beginPath(); ctx.arc(cx, cy, coreR * 3, 0, Math.PI * 2); ctx.fill();
+        const ringCount = perf ? 3 : 6;
+        for (let r = 0; r < ringCount; r++) {
+          const baseR = Math.min(w, h) * (0.12 + r * 0.07) * (1 + bass * sens * 0.15) * (0.7 + sectionIntensity * 0.3);
+          const thickness = (1.5 + mids * 6 * sens + r * 0.4) * energyMult;
+          const rot = cameraTRef.current * (0.3 + r * 0.1) + r;
+          ctx.save();
+          ctx.translate(cx, cy); ctx.rotate(rot); ctx.scale(1, Math.max(0.15, tilt - r * 0.03));
+          ctx.strokeStyle = liveColors[r % liveColors.length];
+          ctx.globalAlpha = 0.55 + mids * 0.5;
+          ctx.lineWidth = thickness;
+          ctx.beginPath(); ctx.arc(0, 0, baseR, 0, Math.PI * 2); ctx.stroke();
+          ctx.restore();
+          if (highs > 0.55 && Math.random() < 0.3) {
+            sparksRef.current.push({ angle: Math.random() * Math.PI * 2, r: baseR, speed: 0.04 + highs * 0.05, life: 1, ring: r });
+          }
+        }
+        ctx.globalAlpha = 1;
+        for (const s of sparksRef.current) {
+          s.angle += s.speed; s.life *= 0.96;
+          const baseR = Math.min(w, h) * (0.12 + s.ring * 0.07);
+          const x = cx + Math.cos(s.angle) * baseR;
+          const y = cy + Math.sin(s.angle) * baseR * Math.max(0.15, tilt - s.ring * 0.03);
+          ctx.fillStyle = liveColors[2]; ctx.globalAlpha = s.life;
+          ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        sparksRef.current = sparksRef.current.filter((s) => s.life > 0.08);
       }
-      ctx.globalAlpha = 1;
-      for (const s of sparksRef.current) {
-        s.angle += s.speed; s.life *= 0.96;
-        const baseR = Math.min(w, h) * (0.12 + s.ring * 0.07);
-        const x = cx + Math.cos(s.angle) * baseR;
-        const y = cy + Math.sin(s.angle) * baseR * Math.max(0.15, tilt - s.ring * 0.03);
-        ctx.fillStyle = liveColors[2]; ctx.globalAlpha = s.life;
-        ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-      sparksRef.current = sparksRef.current.filter((s) => s.life > 0.08);
 
     // ── Depth Field Particles ────────────────────────────────────────────
     } else if (eng === 'depth') {
@@ -890,8 +1002,53 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.beginPath(); ctx.arc(cx, cy, Math.min(w,h) * 0.06 * (1 + burst), 0, Math.PI * 2); ctx.fill();
         ctx.globalAlpha = 1;
 
+      } else if (vrnt === 'galaxy') {
+        // ── Galaxy: stars orbit centre in perspective ellipses ──────────
+        // starsRef: {x = angle, y = orbRadius (0-1), z = zDepth, hue = colorIdx}
+        const targetG = Math.floor((perf ? 280 : 680) * (0.35 + particleDensRef.current * 0.65));
+        while (starsRef.current.length < targetG) {
+          const a = Math.random() * Math.PI * 2;
+          const rad = 0.08 + Math.pow(Math.random(), 0.6) * 0.88; // cluster toward core
+          starsRef.current.push({ x: a, y: rad, z: 0.1 + Math.random() * 0.9, hue: Math.random() });
+        }
+        starsRef.current.length = Math.min(starsRef.current.length, targetG + 60);
+
+        const baseAngSpd  = 0.0025 + bSpeed * 0.007;
+        const beatBoost   = burst * bResp * 0.035;
+        const tiltY       = 0.42 + Math.sin(cameraTRef.current * 0.12) * 0.14; // gentle galaxy tilt
+        const maxR        = Math.min(w, h) * 0.44;
+
+        for (const s of starsRef.current) {
+          // Keplerian: inner stars orbit faster
+          const angSpeed = (baseAngSpd + beatBoost) * (0.25 + 0.75 / (s.y * 2 + 0.3)) * energyMult;
+          s.x += angSpeed;
+          if (s.x > Math.PI * 2) s.x -= Math.PI * 2;
+
+          const sx = cx + Math.cos(s.x) * s.y * maxR;
+          const sy = cy + Math.sin(s.x) * s.y * maxR * tiltY;
+
+          const bandIdx  = Math.min(Math.floor(s.hue * freq.length * 0.5), freq.length - 1);
+          const bandVal  = (freq[bandIdx] / 255) * sens;
+          const size     = Math.max(0.3, (0.4 + s.z * 2.5 + bandVal * 7 * sectionIntensity) * (0.4 + burst * 0.6));
+          const color    = liveColors[Math.floor(s.hue * liveColors.length)];
+
+          ctx.globalAlpha = (0.15 + s.z * 0.85) * (0.25 + bandVal * 0.75);
+          ctx.shadowColor = color; ctx.shadowBlur = size * 2.2;
+          ctx.fillStyle = color;
+          ctx.beginPath(); ctx.arc(sx, sy, size, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+        // Galactic core glow
+        const coreSize = Math.min(w, h) * (0.055 + bass * 0.05 * sens * (0.7 + sectionIntensity * 0.3));
+        const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreSize * 3.5);
+        coreGrad.addColorStop(0, `rgba(${hexToRgb(liveColors[0])}, ${0.9 + burst * 0.1})`);
+        coreGrad.addColorStop(0.35, `rgba(${hexToRgb(liveColors[1])}, 0.35)`);
+        coreGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = coreGrad;
+        ctx.beginPath(); ctx.arc(cx, cy, coreSize * 3.5, 0, Math.PI * 2); ctx.fill();
+
       } else {
-        // ── Starfield (default) ─────────────────────────────────────────
         const baseSpd = 0.00025 + bSpeed * 0.0012;
         const beatSpike = burst * bResp * 0.10 * sens;
         const speed = (baseSpd + beatSpike) * energyMult;
@@ -1016,6 +1173,41 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           ctx.beginPath();
           topPts.forEach(([x, y], i) => i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y));
           ctx.stroke();
+        }
+      } else if (vrnt === 'grid') {
+        // ── Grid: top-down frequency grid — cells pulse per band ─────────
+        const gCols = perf ? 14 : 22;
+        const gRows = perf ? 14 : 22;
+        const cellW = w / gCols;
+        const cellH = h / gRows;
+        cameraTRef.current += (0.012 + bass * 0.016 * sens) * energyMult;
+        const gt = cameraTRef.current;
+
+        for (let row = 0; row < gRows; row++) {
+          for (let col = 0; col < gCols; col++) {
+            const freqIdx = Math.min(Math.floor((col / gCols) * freq.length * 0.65), freq.length - 1);
+            const v = (freq[freqIdx] / 255) * sens;
+            const ripple = 0.5 + 0.5 * Math.sin(col * 0.9 + row * 0.9 - gt * 4);
+            const intensity = Math.min(1, v * ripple * energyMult * (0.5 + sectionIntensity * 0.5));
+            if (intensity < 0.03) continue;
+            const color = liveColors[(col + Math.floor(row * 0.5)) % liveColors.length];
+            const pad   = cellW * (0.1 + (1 - intensity) * 0.28);
+            ctx.fillStyle = color;
+            ctx.globalAlpha = intensity * 0.72;
+            ctx.shadowColor = color; ctx.shadowBlur = intensity * 22;
+            ctx.fillRect(col * cellW + pad, row * cellH + pad, cellW - pad * 2, cellH - pad * 2);
+            // Bright border ring
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 0.5;
+            ctx.globalAlpha = intensity * 0.22;
+            ctx.strokeRect(col * cellW + 1, row * cellH + 1, cellW - 2, cellH - 2);
+          }
+        }
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        // Beat flash on entire grid
+        if (elevBurst > 0.15) {
+          ctx.fillStyle = `rgba(${hexToRgb(liveColors[0])}, ${elevBurst * 0.08})`;
+          ctx.fillRect(0, 0, w, h);
         }
       } else {
         // ── Wireframe (default): mesh grid lines ─────────────────────────
@@ -1283,43 +1475,103 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const energy = bass * 0.5 + mids * 0.35 + highs * 0.15;
       solarTRef.current += (0.008 + energy * 0.04 * sens) * energyMult;
       const cx = w / 2, cy = h / 2;
-      const zoom = Math.min(1.22, 1 + bass * sens * 0.35 * sectionIntensity);
-      // Segment count scales with section — 6 at breakdown, up to 12 at drop
-      const segs = perf ? 6 : Math.round(6 + sectionIntensity * 6);
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.scale(zoom, zoom);
-      for (let seg = 0; seg < segs; seg++) {
+
+      if (vrnt === 'mandala') {
+        // ── Mandala: organic petal bloom, beat-reactive ──────────────────
+        const petalN = perf ? 8 : 14;
+        const rot    = solarTRef.current * 0.09;
         ctx.save();
-        ctx.rotate((seg / segs) * Math.PI * 2 + solarTRef.current * 0.18);
-        if (seg % 2 === 1) ctx.scale(-1, 1);
-        const bars = 28;
-        const step = Math.floor(freq.length / bars);
-        const c = liveColors[seg % liveColors.length];
-        ctx.strokeStyle = c;
-        ctx.shadowColor = c;
-        ctx.shadowBlur  = (4 + highs * 14) * (0.5 + sectionIntensity * 0.5);
-        ctx.lineWidth   = 1 + bass * 3 * sens;
-        ctx.globalAlpha = 0.5 + mids * 0.5;
-        ctx.beginPath();
-        let first = true;
-        for (let b = 0; b < bars; b++) {
-          const v = (freq[b * step] / 255) * sens;
-          const angle = (b / bars) * Math.PI * 0.45 - 0.225;
-          const r2    = Math.min(w, h) * 0.04 + v * Math.min(w, h) * 0.3 * (1 + mids * 0.6) * (0.6 + sectionIntensity * 0.4);
-          const r1    = Math.min(w, h) * 0.04;
-          if (first) { ctx.moveTo(Math.cos(angle) * r1, Math.sin(angle) * r1); first = false; }
-          ctx.lineTo(Math.cos(angle) * r2, Math.sin(angle) * r2);
+        ctx.translate(cx, cy);
+        for (let p = 0; p < petalN; p++) {
+          ctx.save();
+          ctx.rotate(rot + (p / petalN) * Math.PI * 2);
+          if (p % 2 === 1) ctx.scale(-1, 1); // mirror every other petal
+          const color    = liveColors[p % liveColors.length];
+          const petalL   = Math.min(w, h) * (0.19 + bass * 0.10 * sens) * (0.65 + sectionIntensity * 0.35);
+          const petalW   = Math.min(w, h) * (0.055 + mids * 0.035 * sens);
+          // Filled petal shape (bezier teardrop)
+          ctx.fillStyle  = color;
+          ctx.globalAlpha = 0.12 + mids * 0.12;
+          ctx.shadowColor = color;
+          ctx.shadowBlur  = (8 + highs * 18) * (0.45 + sectionIntensity * 0.55);
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.bezierCurveTo( petalW, petalL * 0.32,  petalW, petalL * 0.68, 0, petalL);
+          ctx.bezierCurveTo(-petalW, petalL * 0.68, -petalW, petalL * 0.32, 0, 0);
+          ctx.fill();
+          // Petal outline with glow
+          ctx.strokeStyle = color;
+          ctx.lineWidth   = 1.2 + bass * 2.5 * sens;
+          ctx.globalAlpha = 0.55 + mids * 0.45;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.bezierCurveTo( petalW, petalL * 0.32,  petalW, petalL * 0.68, 0, petalL);
+          ctx.bezierCurveTo(-petalW, petalL * 0.68, -petalW, petalL * 0.32, 0, 0);
+          ctx.stroke();
+          // Frequency dots along petal spine
+          const dotBars = 18;
+          const dotStep = Math.floor(freq.length / dotBars);
+          for (let b = 0; b < dotBars; b++) {
+            const v2    = (freq[b * dotStep] / 255) * sens;
+            const t2    = (b + 1) / (dotBars + 1);
+            const spineY = petalL * t2;
+            const spineX = Math.sin(t2 * Math.PI) * petalW * (0.7 + v2 * 1.4);
+            ctx.globalAlpha = v2 * 0.9;
+            ctx.fillStyle   = color;
+            ctx.shadowBlur  = v2 * 8;
+            ctx.beginPath(); ctx.arc(spineX, spineY, 1 + v2 * 3.5, 0, Math.PI * 2); ctx.fill();
+          }
+          ctx.restore();
         }
-        ctx.stroke();
-        ctx.globalAlpha = 0.2 + bass * 0.4;
-        ctx.beginPath();
-        ctx.arc(0, 0, Math.min(w, h) * 0.04 * (1 + bass * 0.5), -0.225, 0.225);
-        ctx.stroke();
+        // Centre jewel
+        const jewGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.min(w,h) * 0.04 * (1 + bass * 0.5));
+        jewGrad.addColorStop(0, liveColors[0]); jewGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = jewGrad; ctx.globalAlpha = 0.85;
+        ctx.shadowColor = liveColors[0]; ctx.shadowBlur = 20 + bass * 20 * sens;
+        ctx.beginPath(); ctx.arc(0, 0, Math.min(w,h) * 0.04 * (1 + bass * 0.5), 0, Math.PI * 2); ctx.fill();
         ctx.restore();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+      } else {
+        // ── Kaleidoscope (default): mirrored radial burst lines ──────────
+        const zoom = Math.min(1.22, 1 + bass * sens * 0.35 * sectionIntensity);
+        // Segment count scales with section — 6 at breakdown, up to 12 at drop
+        const segs = perf ? 6 : Math.round(6 + sectionIntensity * 6);
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.scale(zoom, zoom);
+        for (let seg = 0; seg < segs; seg++) {
+          ctx.save();
+          ctx.rotate((seg / segs) * Math.PI * 2 + solarTRef.current * 0.18);
+          if (seg % 2 === 1) ctx.scale(-1, 1);
+          const bars = 28;
+          const step = Math.floor(freq.length / bars);
+          const c = liveColors[seg % liveColors.length];
+          ctx.strokeStyle = c;
+          ctx.shadowColor = c;
+          ctx.shadowBlur  = (4 + highs * 14) * (0.5 + sectionIntensity * 0.5);
+          ctx.lineWidth   = 1 + bass * 3 * sens;
+          ctx.globalAlpha = 0.5 + mids * 0.5;
+          ctx.beginPath();
+          let first = true;
+          for (let b = 0; b < bars; b++) {
+            const v = (freq[b * step] / 255) * sens;
+            const angle = (b / bars) * Math.PI * 0.45 - 0.225;
+            const r2    = Math.min(w, h) * 0.04 + v * Math.min(w, h) * 0.3 * (1 + mids * 0.6) * (0.6 + sectionIntensity * 0.4);
+            const r1    = Math.min(w, h) * 0.04;
+            if (first) { ctx.moveTo(Math.cos(angle) * r1, Math.sin(angle) * r1); first = false; }
+            ctx.lineTo(Math.cos(angle) * r2, Math.sin(angle) * r2);
+          }
+          ctx.stroke();
+          ctx.globalAlpha = 0.2 + bass * 0.4;
+          ctx.beginPath();
+          ctx.arc(0, 0, Math.min(w, h) * 0.04 * (1 + bass * 0.5), -0.225, 0.225);
+          ctx.stroke();
+          ctx.restore();
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
       }
-      ctx.restore();
-      ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 
     // ── Solar System (new) ────────────────────────────────────────────────
     } else if (eng === 'solar') {
@@ -1747,10 +1999,68 @@ if (dbExports.length > 0) {
   // File picker
   // ─────────────────────────────────────────────────────────────────────────
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const configFileInputRef = useRef<HTMLInputElement>(null);
   const onPickFile   = () => fileInputRef.current?.click();
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) { stopAudio(); setPlaying(false); playingRef.current = false; offsetRef.current = 0; loadFile(file); }
+  };
+
+  // ── Project config JSON export / import ───────────────────────────────────
+  const exportProjectConfig = () => {
+    const config = {
+      version: 1,
+      engineId: engine,
+      variant,
+      palette,
+      customPalettes: (() => { try { return JSON.parse(localStorage.getItem('ma_custom_palettes') || '{}'); } catch { return {}; } })(),
+      motion: { beatSensitivity, particleDensity, smoothing, baseSpeed, beatResponse },
+      aspect,
+      presetId,
+      clipDuration,
+      trackName: project?.fileName ?? null,
+    };
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `${(project?.fileName ?? 'project').replace(/\.[^.]+$/, '')}-config.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importProjectConfig = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const c = JSON.parse(e.target?.result as string);
+        if (c.version !== 1) throw new Error('Unknown config version');
+        if (c.engineId)                       setEngine(c.engineId as EngineId);
+        if (c.variant !== undefined)          setVariant(c.variant);
+        if (typeof c.palette === 'number')    setPalette(c.palette);
+        if (c.customPalettes && typeof c.customPalettes === 'object') {
+          Object.entries(c.customPalettes).forEach(([idx, cols]) => {
+            const i = Number(idx);
+            if (PALETTES[i] && Array.isArray(cols) && (cols as unknown[]).length === 3)
+              PALETTES[i] = { ...PALETTES[i], colors: cols as [string, string, string] };
+          });
+          try { localStorage.setItem('ma_custom_palettes', JSON.stringify(c.customPalettes)); } catch { /* ignore */ }
+        }
+        if (c.motion) {
+          if (typeof c.motion.beatSensitivity === 'number') setBeatSensitivity(c.motion.beatSensitivity);
+          if (typeof c.motion.particleDensity  === 'number') setParticleDensity(c.motion.particleDensity);
+          if (typeof c.motion.smoothing        === 'number') setSmoothing(c.motion.smoothing);
+          if (typeof c.motion.baseSpeed        === 'number') setBaseSpeed(c.motion.baseSpeed);
+          if (typeof c.motion.beatResponse     === 'number') setBeatResponse(c.motion.beatResponse);
+        }
+        if (c.aspect)       setAspect(c.aspect);
+        if (c.presetId)     setPresetId(c.presetId);
+        if (c.clipDuration) setClipDuration(c.clipDuration);
+      } catch (err) {
+        console.error('[studio] config import failed:', err);
+      }
+    };
+    reader.readAsText(file);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2069,6 +2379,29 @@ if (dbExports.length > 0) {
               </div>
             )}
 
+            {/* Auto-perf suggestion — shown after 2s of sustained low FPS */}
+            {showPerfSuggest && !perfMode && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-auto w-[88%] max-w-[300px]">
+                <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-black/85 border border-amber-400/25 backdrop-blur-sm shadow-2xl">
+                  <span className="text-amber-400 text-base shrink-0">⚡</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] text-white/90 font-medium leading-tight">Playback running slow</p>
+                    <p className="text-[10px] text-white/50 mt-0.5">Enable Performance Mode for smoother animation</p>
+                  </div>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button onClick={() => { setPerfMode(true); setShowPerfSuggest(false); setActiveTab('motion'); }}
+                      className="px-2 py-1 rounded-lg bg-amber-500/25 hover:bg-amber-500/40 text-amber-300 text-[10px] font-semibold transition-colors">
+                      Enable
+                    </button>
+                    <button onClick={() => setShowPerfSuggest(false)}
+                      className="text-white/30 hover:text-white/60 transition-colors">
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Keyboard shortcut coach mark — shown once after first track load */}
             {showOnboarding && (
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-auto">
@@ -2131,13 +2464,36 @@ if (dbExports.length > 0) {
               <div className="text-xs text-gray-300 tabular-nums shrink-0 min-w-[70px]">
                 {fmt(currentTime)} / {fmt(project?.duration ?? 0)}
               </div>
-              <div className="flex-1 relative h-7 cursor-pointer"
+              <div className="flex-1 relative h-7 cursor-pointer select-none"
                 title="Seek  (← → arrow keys)"
-                onClick={(e) => {
+                onMouseDown={(e) => {
                   if (!project) return;
+                  isDraggingSeekRef.current = true;
                   const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-                  seek(((e.clientX - rect.left) / rect.width) * project.duration);
-                }}>
+                  seek(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * project.duration);
+                }}
+                onMouseMove={(e) => {
+                  if (!isDraggingSeekRef.current || !project) return;
+                  const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                  seek(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * project.duration);
+                }}
+                onMouseUp={() => { isDraggingSeekRef.current = false; }}
+                onMouseLeave={() => { isDraggingSeekRef.current = false; }}
+                onTouchStart={(e) => {
+                  if (!project) return;
+                  isDraggingSeekRef.current = true;
+                  const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                  const touch = e.touches[0];
+                  seek(Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)) * project.duration);
+                }}
+                onTouchMove={(e) => {
+                  if (!isDraggingSeekRef.current || !project) return;
+                  e.preventDefault();
+                  const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+                  const touch = e.touches[0];
+                  seek(Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)) * project.duration);
+                }}
+                onTouchEnd={() => { isDraggingSeekRef.current = false; }}>
                 {waveformPoints ? (
                   /* Waveform visualizer — polygon computed once, only clip rects update per frame */
                   <svg className="absolute inset-0 w-full h-full" viewBox="0 0 1000 28"
@@ -2533,6 +2889,22 @@ if (dbExports.length > 0) {
                 {exportMode === 'server' && (
                   <p className="text-xs text-amber-400/80">Use Chrome or Firefox on desktop for recording.</p>
                 )}
+
+                {/* ── Project config backup ─────────────────────────── */}
+                <div className="pt-2 border-t border-white/10 mt-1">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Project config</div>
+                  <div className="flex gap-2">
+                    <button onClick={exportProjectConfig}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-[11px] text-gray-300 transition-colors">
+                      <Download className="size-3" /> Save config
+                    </button>
+                    <button onClick={() => configFileInputRef.current?.click()}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-[11px] text-gray-300 transition-colors">
+                      <Upload className="size-3" /> Load config
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-gray-600 mt-1.5">Save and restore engine, palette &amp; motion settings as a JSON file.</p>
+                </div>
               </TabsContent>
  
         {/* ── History tab ─────────────────────────────────── */}
@@ -2607,10 +2979,18 @@ if (dbExports.length > 0) {
                                   {j.storagePath && (
                                     <Button size="sm" variant="outline"
                                       className="border-white/20 text-white hover:bg-white/10 h-7 text-xs"
-                                      title="Get a shareable cloud link (valid 1 hour)"
+                                      title="Open shareable page (link valid 7 days)"
                                       onClick={async () => {
-                                        const url = await getExportSignedUrl(j.storagePath!, 3600);
-                                        if (url) navigator.clipboard?.writeText(url);
+                                        const url = await getExportSignedUrl(j.storagePath!, 604800); // 7 days
+                                        if (url) {
+                                          const params = new URLSearchParams({
+                                            v: url,
+                                            n: project?.fileName?.replace(/\.[^.]+$/, '') ?? 'Track',
+                                            e: engine,
+                                            a: j.aspect ?? aspect,
+                                          });
+                                          window.open(`/share?${params}`, '_blank');
+                                        }
                                       }}>
                                       <Share2 className="size-3 mr-1" /> Share
                                     </Button>
@@ -2641,6 +3021,13 @@ if (dbExports.length > 0) {
           </Tabs>
         </div>
         </div>
+      {/* Hidden file inputs */}
+      <input ref={configFileInputRef} type="file" accept=".json,application/json" className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) importProjectConfig(f);
+          e.target.value = '';
+        }} />
       <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); clearExpiredFlag(); }} />
     </div>
   );
