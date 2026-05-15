@@ -90,6 +90,20 @@ const ENGINES: { id: EngineId; name: string; description: string; group: '2D' | 
   { id: 'solar',       name: 'Geometric Pulse',       description: 'Concentric beat rings expand and shatter on every drop.', group: '3D' },
 ];
 
+// ── Per-engine optimal motion defaults ────────────────────────────────────────
+type MotionDefaults = { beatSensitivity: number; particleDensity: number; smoothing: number; baseSpeed: number; beatResponse: number };
+const ENGINE_MOTION_DEFAULTS: Record<string, MotionDefaults> = {
+  bars:         { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.92, baseSpeed: 1.0, beatResponse: 0.92 },
+  radial:       { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.92, baseSpeed: 1.0, beatResponse: 0.92 },
+  orbital:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.90, baseSpeed: 1.0, beatResponse: 0.93 },
+  depth:        { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.62, baseSpeed: 1.0, beatResponse: 1.0  },
+  terrain:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.90, baseSpeed: 1.0, beatResponse: 0.90 },
+  tunnel:       { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.93, baseSpeed: 1.0, beatResponse: 0.92 },
+  neon_spheres: { beatSensitivity: 1.0, particleDensity: 0.97, smoothing: 0.91, baseSpeed: 1.0, beatResponse: 0.93 },
+  fractal:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.92, baseSpeed: 1.0, beatResponse: 0.90 },
+  solar:        { beatSensitivity: 1.0, particleDensity: 0.95, smoothing: 0.93, baseSpeed: 1.0, beatResponse: 0.93 },
+};
+
 // ─── Engine style variants ────────────────────────────────────────────────────
 const VARIANTS: Partial<Record<EngineId, { id: string; label: string; description: string }[]>> = {
   bars: [
@@ -326,7 +340,12 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const cameraTRef = useRef(0);
   const solarTRef  = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const pendingUploadRef = useRef<{ file: File; audioMeta: { name: string; duration: number; sampleRate?: number }; engineId: string } | null>(null);  // ADD THIS
+  const pendingUploadRef = useRef<{ file: File; audioMeta: { name: string; duration: number; sampleRate?: number }; engineId: string } | null>(null);
+
+  // ── Perf: pre-computed path cache for Aurora ribbons ─────────────────────
+  // Avoids re-computing 2160 sin() calls/frame; reused for both stroke and fill
+  const ribbonPathCache = useRef<Float32Array[]>([]);  // [ribbon][point*2] = x,y pairs
+  const ribbonGradCache = useRef<Map<string, CanvasGradient>>(new Map()); // color→gradient
 
   // Phase 9 refs — written once after decode, read every RAF frame
   const sectionsRef       = useRef<TrackSection[]>([]);
@@ -384,6 +403,17 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   useEffect(() => {
     starsRef.current = [];
     lowFpsWindowsRef.current = 0;
+    ribbonPathCache.current = [];
+    ribbonGradCache.current.clear();
+    // Apply per-engine optimal motion defaults
+    const def = ENGINE_MOTION_DEFAULTS[engine];
+    if (def) {
+      setBeatSensitivity(def.beatSensitivity);
+      setParticleDensity(def.particleDensity);
+      setSmoothing(def.smoothing);
+      setBaseSpeed(def.baseSpeed);
+      setBeatResponse(def.beatResponse);
+    }
     // Capture current frame for crossfade before the engine switches
     const canvas = canvasRef.current;
     if (canvas) {
@@ -626,7 +656,8 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       prevPalRef.current        = pal;
       prevSectionIntRef.current = sectionIntensity;
       liveColorsRef.current = colors.map(c => shiftColorIntensity(c, sectionIntensity)) as [string,string,string];
-      rgbCache.current.clear(); // palette changed → invalidate RGB cache
+      rgbCache.current.clear();          // palette changed → invalidate hex→rgb cache
+      ribbonGradCache.current.clear();   // cached ribbon gradients are now stale
     }
     const liveColors = liveColorsRef.current;
 
@@ -1511,58 +1542,69 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
       if (vrnt === 'vertical') {
         // ── Vertical: columns rising from the bottom ─────────────────────
+        const steps = perf ? 36 : 60;
+        const pts2  = steps + 1;
+        if (ribbonPathCache.current.length !== numRibbons ||
+            (ribbonPathCache.current[0]?.length ?? 0) !== pts2 * 2) {
+          ribbonPathCache.current = Array.from({ length: numRibbons }, () => new Float32Array(pts2 * 2));
+          ribbonGradCache.current.clear();
+        }
         for (let ri = 0; ri < numRibbons; ri++) {
-          const bandLo = Math.floor((ri / numRibbons) * freq.length * 0.5);
-          const bandHi = Math.floor(((ri + 1) / numRibbons) * freq.length * 0.5);
+          const bandLo  = Math.floor((ri / numRibbons) * freq.length * 0.5);
+          const bandHi  = Math.floor(((ri + 1) / numRibbons) * freq.length * 0.5);
           const bandVal = avg(freq, bandLo, bandHi) * sens * energyMult;
-          const color = liveColors[ri % liveColors.length];
+          const color   = liveColors[ri % liveColors.length];
+          const colX    = w * (0.05 + ri / numRibbons * 0.9);
+          const amp     = (20 + bandVal * w * 0.12) * (0.4 + sectionIntensity * 0.6);
+          const freq2   = 2.5 + ri * 0.7;
+          const phase   = t * (0.8 + ri * 0.15);
+          const piF2    = Math.PI * freq2;
+          const piF2h   = Math.PI * freq2 * 0.5;
+          const buf     = ribbonPathCache.current[ri];
 
-          const colX = w * (0.05 + ri / numRibbons * 0.9);
-          const amplitude = (20 + bandVal * w * 0.12) * (0.4 + sectionIntensity * 0.6);
-          const freq2 = 2.5 + ri * 0.7;
-          const phaseShift = t * (0.8 + ri * 0.15);
-
-          ctx.save();
-          ctx.globalAlpha = (0.12 + bandVal * 0.55) * (0.5 + sectionIntensity * 0.5);
-          ctx.shadowColor = color; ctx.shadowBlur = 18 + bandVal * 40;
-
-          // Vertical gradient (fades at top and bottom)
-          const vgrad = ctx.createLinearGradient(0, 0, 0, h);
-          vgrad.addColorStop(0,   `rgba(${hexToRgb(color, hxCache)}, 0)`);
-          vgrad.addColorStop(0.2, color);
-          vgrad.addColorStop(0.8, color);
-          vgrad.addColorStop(1,   `rgba(${hexToRgb(color, hxCache)}, 0)`);
-          ctx.strokeStyle = vgrad;
-          ctx.lineWidth = 2 + bandVal * 14 * (0.5 + sectionIntensity * 0.5);
-          ctx.lineCap = 'round';
-
-          const steps = perf ? 40 : 80;
-          ctx.beginPath();
           for (let s = 0; s <= steps; s++) {
-            const y = (s / steps) * h;
-            const x = colX
-              + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
-              + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
-            s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            const frac = s / steps;
+            const sinA = Math.sin(frac * piF2  + phase);
+            const sinB = Math.sin(frac * piF2h + phase * 1.3);
+            buf[s * 2]     = colX + sinA * amp + sinB * amp * 0.4;
+            buf[s * 2 + 1] = frac * h;
           }
+
+          const gradKey = `v|${color}|${h}`;
+          let grad = ribbonGradCache.current.get(gradKey);
+          if (!grad) {
+            grad = ctx.createLinearGradient(0, 0, 0, h);
+            grad.addColorStop(0,    `rgba(${hexToRgb(color, hxCache)}, 0)`);
+            grad.addColorStop(0.15, color);
+            grad.addColorStop(0.85, color);
+            grad.addColorStop(1,    `rgba(${hexToRgb(color, hxCache)}, 0)`);
+            ribbonGradCache.current.set(gradKey, grad);
+          }
+
+          const alpha = (0.12 + bandVal * 0.55) * (0.5 + sectionIntensity * 0.5);
+          ctx.globalAlpha = alpha;
+          ctx.strokeStyle = grad;
+          ctx.lineWidth   = 2 + bandVal * 14 * (0.5 + sectionIntensity * 0.5);
+          ctx.lineCap     = 'round';
+          ctx.shadowColor = color;
+          ctx.shadowBlur  = perf ? 0 : Math.min(14, bandVal * 14);
+          ctx.beginPath();
+          ctx.moveTo(buf[0], buf[1]);
+          for (let s = 1; s <= steps; s++) ctx.lineTo(buf[s*2], buf[s*2+1]);
           ctx.stroke();
 
-          // Fill beside column on high energy
-          if (bandVal > 0.35 && !perf) {
-            ctx.globalAlpha *= 0.2;
-            ctx.fillStyle = vgrad;
+          if (bandVal > 0.40 && !perf) {
+            ctx.shadowBlur  = 0;
+            ctx.globalAlpha = alpha * 0.18;
+            ctx.fillStyle   = color;
             ctx.beginPath();
             ctx.moveTo(colX, 0);
-            for (let s = 0; s <= steps; s++) {
-              const y = (s / steps) * h;
-              const x = colX + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude;
-              ctx.lineTo(x, y);
-            }
-            ctx.lineTo(colX + amplitude, h); ctx.lineTo(colX + amplitude, 0);
+            for (let s = 0; s <= steps; s++) ctx.lineTo(buf[s*2], buf[s*2+1]);
+            ctx.lineTo(colX + amp, h); ctx.lineTo(colX + amp, 0);
             ctx.closePath(); ctx.fill();
           }
-          ctx.restore();
         }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
       } else if (vrnt === 'spiral') {
         // ── Spiral: vanishing-point rings collapsing inward ──────────────
         const ringCount = perf ? 10 : 18;
@@ -1651,60 +1693,82 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
       } else {
         // ── Aurora (default): horizontal ribbons ─────────────────────────
+        // OPTIMISED: paths stored in Float32Array (pre-computed once per frame);
+        // gradients cached per color; fill reuses computed points; shadowBlur capped.
+        const steps = perf ? 36 : 60;  // was 80 — 60 is imperceptible at canvas size
+        const pts2  = steps + 1;
+
+        // Resize path cache if ribbon count or step count changed
+        if (ribbonPathCache.current.length !== numRibbons ||
+            (ribbonPathCache.current[0]?.length ?? 0) !== pts2 * 2) {
+          ribbonPathCache.current = Array.from({ length: numRibbons },
+            () => new Float32Array(pts2 * 2));
+          ribbonGradCache.current.clear();
+        }
+
         for (let ri = 0; ri < numRibbons; ri++) {
-          const bandLo = Math.floor((ri / numRibbons) * freq.length * 0.5);
-          const bandHi = Math.floor(((ri + 1) / numRibbons) * freq.length * 0.5);
+          const bandLo  = Math.floor((ri / numRibbons) * freq.length * 0.5);
+          const bandHi  = Math.floor(((ri + 1) / numRibbons) * freq.length * 0.5);
           const bandVal = avg(freq, bandLo, bandHi) * sens * energyMult;
-          const color = liveColors[ri % liveColors.length];
-
+          const color   = liveColors[ri % liveColors.length];
           const ribbonY = h * (0.1 + ri / numRibbons * 0.8);
-          const amplitude = (20 + bandVal * h * 0.22) * (0.4 + sectionIntensity * 0.6);
-          const freq2 = 2.5 + ri * 0.7;
-          const phaseShift = t * (0.8 + ri * 0.15);
+          const amp     = (20 + bandVal * h * 0.22) * (0.4 + sectionIntensity * 0.6);
+          const freq2   = 2.5 + ri * 0.7;
+          const phase   = t * (0.8 + ri * 0.15);
+          const buf     = ribbonPathCache.current[ri];
+          // Pre-computed trig multipliers (avoid repeated multiply inside loop)
+          const piF2    = Math.PI * freq2;
+          const piF2h   = Math.PI * freq2 * 0.5;
 
-          ctx.save();
-          ctx.globalAlpha = (0.12 + bandVal * 0.55) * (0.5 + sectionIntensity * 0.5);
-          ctx.shadowColor = color; ctx.shadowBlur = 18 + bandVal * 40;
-
-          const grad = ctx.createLinearGradient(0, 0, w, 0);
-          grad.addColorStop(0,   `rgba(${hexToRgb(color, hxCache)}, 0)`);
-          grad.addColorStop(0.2, color);
-          grad.addColorStop(0.8, color);
-          grad.addColorStop(1,   `rgba(${hexToRgb(color, hxCache)}, 0)`);
-          ctx.strokeStyle = grad;
-          ctx.lineWidth = 2 + bandVal * 12 * (0.5 + sectionIntensity * 0.5);
-          ctx.lineCap = 'round';
-
-          const steps = perf ? 40 : 80;
-          ctx.beginPath();
+          // ── Pre-compute all path points into Float32Array ──────────────
           for (let s = 0; s <= steps; s++) {
-            const x = (s / steps) * w;
-            const y = ribbonY
-              + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
-              + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
-            s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            const frac = s / steps;
+            buf[s * 2]     = frac * w;
+            buf[s * 2 + 1] = ribbonY
+              + Math.sin(frac * piF2  + phase) * amp
+              + Math.sin(frac * piF2h + phase * 1.3) * amp * 0.4;
           }
+
+          // ── Gradient: cached per color+width key (rarely changes) ──────
+          const gradKey = `${color}|${w}`;
+          let grad = ribbonGradCache.current.get(gradKey);
+          if (!grad) {
+            grad = ctx.createLinearGradient(0, 0, w, 0);
+            grad.addColorStop(0,    `rgba(${hexToRgb(color, hxCache)}, 0)`);
+            grad.addColorStop(0.15, color);
+            grad.addColorStop(0.85, color);
+            grad.addColorStop(1,    `rgba(${hexToRgb(color, hxCache)}, 0)`);
+            ribbonGradCache.current.set(gradKey, grad);
+          }
+
+          // ── Stroke ─────────────────────────────────────────────────────
+          const alpha = (0.12 + bandVal * 0.55) * (0.5 + sectionIntensity * 0.5);
+          ctx.globalAlpha = alpha;
+          ctx.strokeStyle = grad;
+          ctx.lineWidth   = 2 + bandVal * 12 * (0.5 + sectionIntensity * 0.5);
+          ctx.lineCap     = 'round';
+          ctx.shadowColor = color;
+          // Cap at 14: still visibly glowy, but GPU blur kernel is 4× smaller than 58
+          ctx.shadowBlur  = perf ? 0 : Math.min(14, bandVal * 14);
+          ctx.beginPath();
+          ctx.moveTo(buf[0], buf[1]);
+          for (let s = 1; s <= steps; s++) ctx.lineTo(buf[s*2], buf[s*2+1]);
           ctx.stroke();
 
-          if (bandVal > 0.35 && !perf) {
-            ctx.globalAlpha *= 0.25;
-            ctx.fillStyle = grad;
+          // ── Fill bloom: reuses buf — zero extra sin() calls ────────────
+          if (bandVal > 0.40 && !perf) {
+            ctx.shadowBlur  = 0;
+            ctx.globalAlpha = alpha * 0.18;
+            ctx.fillStyle   = color;
             ctx.beginPath();
             ctx.moveTo(0, ribbonY);
-            for (let s = 0; s <= steps; s++) {
-              const x = (s / steps) * w;
-              const y = ribbonY
-                + Math.sin(s / steps * Math.PI * freq2 + phaseShift) * amplitude
-                + Math.sin(s / steps * Math.PI * (freq2 * 0.5) + phaseShift * 1.3) * amplitude * 0.4;
-              ctx.lineTo(x, y);
-            }
-            ctx.lineTo(w, ribbonY + amplitude); ctx.lineTo(0, ribbonY + amplitude);
+            for (let s = 0; s <= steps; s++) ctx.lineTo(buf[s*2], buf[s*2+1]);
+            ctx.lineTo(w, ribbonY + amp); ctx.lineTo(0, ribbonY + amp);
             ctx.closePath(); ctx.fill();
           }
-          ctx.restore();
         }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1; ctx.shadowBlur = 0;
     } else if (eng === 'neon_spheres') {
       ctx.fillStyle = `rgba(2,2,10,${0.22 + (1 - sectionIntensity) * 0.08})`;
       ctx.fillRect(0, 0, w, h);
@@ -1803,7 +1867,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
         ctx.save();
         ctx.shadowColor = color;
-        ctx.shadowBlur  = (15 + be * 60 * sens) * (0.6 + sectionIntensity * 0.4);
+        ctx.shadowBlur  = perf ? 0 : Math.min(24, (8 + be * 20 * sens) * (0.6 + sectionIntensity * 0.4));
         const g = ctx.createRadialGradient(sx - r * 0.3, sy - r * 0.3, 0, sx, sy, r * 1.8);
         g.addColorStop(0, '#ffffff');
         g.addColorStop(0.15, color);
@@ -2677,17 +2741,35 @@ if (dbExports.length > 0) {
     if (file) { stopAudio(); setPlaying(false); playingRef.current = false; offsetRef.current = 0; loadFile(file); }
   };
 
+  const canvasAreaRef = useRef<HTMLDivElement>(null); // target element for fullscreen
+
   const toggleFullscreen = () => {
-    const el = document.documentElement;
-    if (!document.fullscreenElement) {
-      el.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
+    if (isFullscreen) {
+      // Exit — try native first, then CSS fallback
+      if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+      }
+      setIsFullscreen(false);
+      return;
+    }
+    // Enter — try native fullscreen on the canvas area element
+    const el = canvasAreaRef.current;
+    const supportsFS = !!el?.requestFullscreen;
+    if (supportsFS && el) {
+      el.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {
+        // Native failed (permissions/iOS) → CSS fullscreen
+        setIsFullscreen(true);
+      });
     } else {
-      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
+      // iOS Safari / unsupported → CSS fullscreen overlay
+      setIsFullscreen(true);
     }
   };
-  // Sync state if user presses Esc to exit fullscreen natively
+  // Sync when user presses Esc (native fullscreen exit)
   useEffect(() => {
-    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    const handler = () => {
+      if (!document.fullscreenElement) setIsFullscreen(false);
+    };
     document.addEventListener('fullscreenchange', handler);
     return () => document.removeEventListener('fullscreenchange', handler);
   }, []);
@@ -2988,8 +3070,11 @@ if (dbExports.length > 0) {
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
  
         {/* Canvas + transport — FIXED height on mobile so controls below can scroll freely */}
-        <div className={`flex flex-col shrink-0 lg:flex-1 lg:min-h-0 lg:h-auto
-                        ${isFullscreen ? 'flex-1 !p-0 !gap-0' : 'p-2 sm:p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden'}`}
+        <div ref={canvasAreaRef}
+             className={`flex flex-col shrink-0 lg:flex-1 lg:min-h-0 lg:h-auto
+                        ${isFullscreen
+                          ? 'fixed inset-0 z-50 bg-black flex-1 !p-0 !gap-0'  // CSS fullscreen fallback (works on iOS)
+                          : 'p-2 sm:p-3 lg:p-4 gap-2 lg:gap-3 overflow-hidden'}`}
              style={{
                height: isFullscreen ? '100%' : (
                  // Desktop: no inline height — CSS flex handles it
@@ -3255,8 +3340,49 @@ if (dbExports.length > 0) {
                 {/* Playhead thumb */}
                 <div className="absolute top-1/2 -translate-y-1/2 size-3 -ml-1.5 rounded-full bg-white shadow-lg"
                   style={{ left: `${pct}%` }} />
+
+                {/* Section boundary tick marks on the waveform */}
+                {trackAnalysis && project && trackAnalysis.sections.map((sec, i) => {
+                  if (i === 0) return null; // skip start
+                  const tickPct = (sec.startSec / project.duration) * 100;
+                  const color =
+                    sec.label === 'drop'      ? '#f59e0b' :
+                    sec.label === 'chorus'    ? '#a855f7' :
+                    sec.label === 'verse'     ? '#3b82f6' :
+                    sec.label === 'breakdown' ? '#6366f1' : '#ffffff';
+                  return (
+                    <div key={i} className="absolute top-0 bottom-0 w-px opacity-70 pointer-events-none"
+                      style={{ left: `${tickPct}%`, background: color }} />
+                  );
+                })}
               </div>
             </div>
+
+            {/* Section jump chips — only when analysis is available */}
+            {trackAnalysis && project && (() => {
+              // Show only high-value sections sorted by start time
+              const interesting = trackAnalysis.sections.filter(s =>
+                ['drop','chorus','verse','breakdown'].includes(s.label)
+              );
+              if (interesting.length === 0) return null;
+              const labelColor: Record<string, string> = {
+                drop:      'bg-amber-500/20 text-amber-300 border-amber-500/30',
+                chorus:    'bg-purple-500/20 text-purple-300 border-purple-500/30',
+                verse:     'bg-blue-500/20 text-blue-300 border-blue-500/30',
+                breakdown: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
+              };
+              return (
+                <div className="flex items-center gap-1.5 flex-wrap px-1 mt-1">
+                  <span className="text-[9px] uppercase tracking-wider text-white/20 shrink-0">Jump</span>
+                  {interesting.map((sec, i) => (
+                    <button key={i} onClick={() => seek(sec.startSec)}
+                      className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${labelColor[sec.label] ?? 'bg-white/10 text-white/50 border-white/10'} hover:opacity-80 transition-opacity`}>
+                      {sec.label} {fmt(sec.startSec)}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
           </div>}{/* end transport bar */}
         </div>
  
