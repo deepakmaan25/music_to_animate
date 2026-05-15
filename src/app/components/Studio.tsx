@@ -1640,6 +1640,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
       // Standing rings: permanent spectrum-driven rings at fixed radii
       const standingCount = 4;
+      const standingSides = vrnt === 'square' ? 4 : vrnt === 'hex' ? 6 : 0; // 0 = circle
       for (let i = 0; i < standingCount; i++) {
         const r = minDim * (0.10 + i * 0.10 + mids * 0.04 * sens * (0.5 + sectionIntensity * 0.5));
         const bandVal = avg(freq, Math.floor(i * freq.length / (standingCount * 2)), Math.floor((i+1) * freq.length / (standingCount * 2)));
@@ -1651,7 +1652,18 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         ctx.globalAlpha = 0.25 + bandVal * 0.55;
         ctx.shadowColor = color; ctx.shadowBlur = 4 + bandVal * 18;
         ctx.beginPath();
-        ctx.arc(cx, cy, liveR, 0, Math.PI * 2);
+        if (standingSides === 0) {
+          ctx.arc(cx, cy, liveR, 0, Math.PI * 2);
+        } else {
+          // Polygon — slow rotation so it feels alive
+          const rot = t * 0.12 + i * (Math.PI / standingSides);
+          for (let s = 0; s <= standingSides; s++) {
+            const a = (s / standingSides) * Math.PI * 2 + rot;
+            s === 0
+              ? ctx.moveTo(cx + Math.cos(a) * liveR, cy + Math.sin(a) * liveR)
+              : ctx.lineTo(cx + Math.cos(a) * liveR, cy + Math.sin(a) * liveR);
+          }
+        }
         ctx.stroke();
         ctx.restore();
       }
