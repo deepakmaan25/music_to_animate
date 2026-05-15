@@ -356,12 +356,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     spheresRef.current = [];
     planetsRef.current = [];
   }, [variant]);
-  useEffect(() => { paletteRef.current      = palette;         }, [palette]);
-  useEffect(() => { beatSensRef.current     = beatSensitivity; }, [beatSensitivity]);
-  useEffect(() => { particleDensRef.current = particleDensity; }, [particleDensity]);
-  useEffect(() => { perfModeRef.current     = perfMode;        }, [perfMode]);
-  useEffect(() => { baseSpeedRef.current    = baseSpeed;       }, [baseSpeed]);
-  useEffect(() => { beatResponseRef.current = beatResponse;    }, [beatResponse]);
+  useEffect(() => { engineRef.current        = engine;          }, [engine]);
+  useEffect(() => { variantRef.current       = variant;         }, [variant]);
+  useEffect(() => { paletteRef.current       = palette;         }, [palette]);
+  useEffect(() => { beatSensRef.current      = beatSensitivity; }, [beatSensitivity]);
+  useEffect(() => { particleDensRef.current  = particleDensity; }, [particleDensity]);
+  useEffect(() => { perfModeRef.current      = perfMode;        }, [perfMode]);
+  useEffect(() => { baseSpeedRef.current     = baseSpeed;       }, [baseSpeed]);
+  useEffect(() => { beatResponseRef.current  = beatResponse;    }, [beatResponse]);
 
   // ── Load file on mount ─────────────────────────────────────────────────────
     useEffect(() => {
