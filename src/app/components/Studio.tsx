@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Play, Pause, Upload, Download, ArrowLeft, RotateCw, FileVideo, Check,
         Loader2, AlertCircle, Share2, Monitor, Smartphone, CloudOff, Cloud, X, Trash2,
-        Maximize2, Minimize2, Zap } from 'lucide-react';
+        Maximize2, Minimize2, Zap, Shuffle, Star, Trash } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
@@ -90,18 +90,24 @@ const ENGINES: { id: EngineId; name: string; description: string; group: '2D' | 
   { id: 'solar',       name: 'Geometric Pulse',       description: 'Concentric beat rings expand and shatter on every drop.', group: '3D' },
 ];
 
+// ── Short engine name lookup for preset naming ─────────────────────────────
+const ENGINE_LABELS_SHORT: Record<string, string> = {
+  bars: 'Bars', radial: 'Radial', orbital: 'Orbital', depth: 'Depth',
+  terrain: 'Terrain', tunnel: 'Aurora', neon_spheres: 'Spheres', fractal: 'Fractal', solar: 'Pulse',
+};
+
 // ── Per-engine optimal motion defaults ────────────────────────────────────────
 type MotionDefaults = { beatSensitivity: number; particleDensity: number; smoothing: number; baseSpeed: number; beatResponse: number };
 const ENGINE_MOTION_DEFAULTS: Record<string, MotionDefaults> = {
-  bars:         { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.92, baseSpeed: 1.0, beatResponse: 0.92 },
-  radial:       { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.92, baseSpeed: 1.0, beatResponse: 0.92 },
-  orbital:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.90, baseSpeed: 1.0, beatResponse: 0.93 },
-  depth:        { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.62, baseSpeed: 1.0, beatResponse: 1.0  },
-  terrain:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.90, baseSpeed: 1.0, beatResponse: 0.90 },
-  tunnel:       { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.93, baseSpeed: 1.0, beatResponse: 0.92 },
-  neon_spheres: { beatSensitivity: 1.0, particleDensity: 0.97, smoothing: 0.91, baseSpeed: 1.0, beatResponse: 0.93 },
-  fractal:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.92, baseSpeed: 1.0, beatResponse: 0.90 },
-  solar:        { beatSensitivity: 1.0, particleDensity: 0.95, smoothing: 0.93, baseSpeed: 1.0, beatResponse: 0.93 },
+  bars:         { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  radial:       { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  orbital:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  depth:        { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.65, baseSpeed: 1.0, beatResponse: 0.90 },
+  terrain:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  tunnel:       { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  neon_spheres: { beatSensitivity: 1.0, particleDensity: 0.97, smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  fractal:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  solar:        { beatSensitivity: 1.0, particleDensity: 0.95, smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
 };
 
 // ─── Engine style variants ────────────────────────────────────────────────────
@@ -259,6 +265,13 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [aspect, setAspect]           = useState<'9:16' | '1:1' | '16:9'>('9:16');
   const [presetId, setPresetId]       = useState('std');
   const [clipDuration, setClipDuration] = useState<'full' | 15 | 30 | 60>('full');
+  // Loop region — null means no loop set; values are fractions 0–1 of track duration
+  const [loopStart, setLoopStart] = useState<number | null>(null);
+  const [loopEnd,   setLoopEnd]   = useState<number | null>(null);
+  const draggingLoopHandle = useRef<'start' | 'end' | 'region' | null>(null);
+  const loopDragOriginX    = useRef(0);
+  const loopDragOriginStart = useRef(0);
+  const loopDragOriginEnd   = useRef(0);
   const [exports, setExports]         = useState<ExportJob[]>([]);
   const [uploadingToCloud, setUploadingToCloud] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -268,6 +281,11 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [activeTab, setActiveTab]     = useState<string>('style');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Named presets — persisted to localStorage
+  type SavedPreset = { name: string; engineId: string; variant: string; palette: number; motion: { beatSensitivity: number; particleDensity: number; smoothing: number; baseSpeed: number; beatResponse: number } };
+  const [savedPresets, setSavedPresets] = useState<SavedPreset[]>(() => {
+    try { return JSON.parse(localStorage.getItem('ma_saved_presets') || '[]'); } catch { return []; }
+  });
   // Crossfade: when engine changes, briefly overlay the previous frame at alpha→0
   const crossfadeRef     = useRef<ImageData | null>(null);
   const crossfadeAlpha   = useRef(0);   // 0=done, 1=start of fade
@@ -315,6 +333,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [showPerfSuggest, setShowPerfSuggest] = useState(false);
   const lowFpsWindowsRef = useRef(0);  // consecutive 500ms windows with fps < 30
   const isDraggingSeekRef = useRef(false);
+  const seekBarRef = useRef<HTMLDivElement>(null); // for non-passive touchmove
   const freqBufRef = useRef<Uint8Array | null>(null);   // reused every frame — avoids GC pressure
   // ── Perf: cached per-frame values to avoid redundant computation ──────────
   const ctxRef            = useRef<CanvasRenderingContext2D | null>(null); // cached canvas context
@@ -551,8 +570,9 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
     const canvas = canvasRef.current;
     if (!canvas) return;
     // Cache the 2D context — getContext() is a dictionary lookup every call
+    // willReadFrequently: true → browser pre-allocates readback buffer, silences warning
     if (!ctxRef.current || ctxRef.current.canvas !== canvas) {
-      ctxRef.current = canvas.getContext('2d', { alpha: false }) ?? null;
+      ctxRef.current = canvas.getContext('2d', { alpha: false, willReadFrequently: true }) ?? null;
     }
     const ctx = ctxRef.current;
     if (!ctx) return;
@@ -2774,7 +2794,55 @@ if (dbExports.length > 0) {
     return () => document.removeEventListener('fullscreenchange', handler);
   }, []);
 
+  // Non-passive touchmove on seek bar — React handlers are passive by default,
+  // so e.preventDefault() throws. Attach manually with { passive: false }.
+  useEffect(() => {
+    const el = seekBarRef.current;
+    if (!el) return;
+    const onMove = (e: TouchEvent) => {
+      if (!isDraggingSeekRef.current || !project) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const touch = e.touches[0];
+      seek(Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)) * project.duration);
+    };
+    el.addEventListener('touchmove', onMove, { passive: false });
+    return () => el.removeEventListener('touchmove', onMove);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
+
   // ── Project config JSON export / import ───────────────────────────────────
+  // ── Randomize: pick random engine + variant + palette ─────────────────────
+  const randomize = () => {
+    const engineIds = ENGINES.map(e => e.id);
+    const newEng = engineIds[Math.floor(Math.random() * engineIds.length)];
+    const variants = VARIANTS[newEng];
+    const newVariant = variants ? variants[Math.floor(Math.random() * variants.length)].id : '';
+    const newPalette = Math.floor(Math.random() * PALETTES.length);
+    setEngine(newEng); setVariant(newVariant); setPalette(newPalette);
+  };
+
+  // ── Named presets ──────────────────────────────────────────────────────────
+  const saveCurrentPreset = (name: string) => {
+    const preset: SavedPreset = {
+      name, engineId: engine, variant, palette,
+      motion: { beatSensitivity, particleDensity, smoothing, baseSpeed, beatResponse },
+    };
+    const updated = [...savedPresets.filter(p => p.name !== name), preset];
+    setSavedPresets(updated);
+    localStorage.setItem('ma_saved_presets', JSON.stringify(updated));
+  };
+  const loadPreset = (preset: SavedPreset) => {
+    setEngine(preset.engineId as EngineId); setVariant(preset.variant); setPalette(preset.palette);
+    setBeatSensitivity(preset.motion.beatSensitivity); setParticleDensity(preset.motion.particleDensity);
+    setSmoothing(preset.motion.smoothing); setBaseSpeed(preset.motion.baseSpeed); setBeatResponse(preset.motion.beatResponse);
+  };
+  const deletePreset = (name: string) => {
+    const updated = savedPresets.filter(p => p.name !== name);
+    setSavedPresets(updated);
+    localStorage.setItem('ma_saved_presets', JSON.stringify(updated));
+  };
+
   const exportProjectConfig = () => {
     const config = {
       version: 1,
@@ -2837,7 +2905,13 @@ if (dbExports.length > 0) {
   const startExport = async () => {
     if (!project || !canvasRef.current || !audioCtxRef.current || !analyserRef.current) return;
     const preset = PRESETS.find((p) => p.id === presetId)!;
-    const dur = clipDuration === 'full' ? Math.min(project.duration, 180) : (clipDuration as number);
+
+    // Use loop region if set, otherwise fall back to clipDuration
+    const loopActive = loopStart !== null && loopEnd !== null;
+    const exportStartSec = loopActive ? (loopStart! * project.duration) : 0;
+    const dur = loopActive
+      ? Math.min((loopEnd! - loopStart!) * project.duration, 180)
+      : (clipDuration === 'full' ? Math.min(project.duration, 180) : (clipDuration as number));
 
     const trackName = project.fileName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
     const aspectLabel = aspect === '9:16' ? 'TikTok' : aspect === '1:1' ? 'Square' : 'YouTube';
@@ -2877,9 +2951,9 @@ if (dbExports.length > 0) {
     src.connect(analyserRef.current);
     analyserRef.current.connect(dest);
     sourceRef.current = src;
-    src.start(0, 0);
+    src.start(0, exportStartSec);
     startedAtRef.current = ctx.currentTime;
-    offsetRef.current = 0;
+    offsetRef.current = exportStartSec;
     playingRef.current = true;
     setPlaying(true);
     runVisualizationLoop();
@@ -2956,7 +3030,7 @@ if (dbExports.length > 0) {
             aspectRatio: aspect,
             resolution: preset ? `${preset.w}x${preset.h}` : '',
             qualityPreset: preset?.name ?? presetId,
-            durationSecs: clipDuration === 'full' ? Math.min(project?.duration ?? 0, 180) : (clipDuration as number),
+            durationSecs: dur,
             blob,
             sizeBytes: blob.size,
           })
@@ -3013,7 +3087,7 @@ if (dbExports.length > 0) {
     if (!isFinite(s)) return '0:00';
     return `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
   };
-  const pct = project ? (currentTime / project.duration) * 100 : 0;
+  const pct = project ? Math.max(0, Math.min(100, (currentTime / project.duration) * 100)) : 0;
 
   const exportModeLabel = exportMode === 'webm'
     ? '⚡ Fast in-browser · WebM'
@@ -3053,6 +3127,10 @@ if (dbExports.length > 0) {
           </div>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <Button variant="ghost" onClick={randomize} title="Randomize engine, style & palette"
+            className="border border-white/15 text-gray-300 hover:bg-white/10 shrink-0 h-8 w-8 p-0">
+            <Shuffle className="size-3.5" />
+          </Button>
           <Button variant="outline" onClick={onPickFile}
             className="border-white/20 text-white hover:bg-white/10 shrink-0 h-8 w-8 sm:w-auto sm:px-3 text-xs p-0 sm:p-auto">
             <Upload className="size-3.5 sm:mr-1.5" />
@@ -3089,16 +3167,17 @@ if (dbExports.length > 0) {
                ),
              }}>
  
-          {/* Canvas viewport — auto-adjusts to selected aspect ratio */}
+          {/* Canvas viewport — constrained to available space, never overflows */}
+          <div className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden">
           <div
-            className="relative mx-auto rounded-xl overflow-hidden bg-black border border-white/10"
+            className="relative rounded-xl overflow-hidden bg-black border border-white/10 flex-shrink-0"
             style={{
+              // Fit inside available box while preserving aspect ratio
               aspectRatio: aspect === '9:16' ? '9 / 16' : aspect === '1:1' ? '1 / 1' : '16 / 9',
-              width: aspect === '9:16' ? 'auto' : '100%',
-              height: aspect === '9:16' ? '100%' : 'auto',
+              maxWidth:  '100%',
               maxHeight: '100%',
-              maxWidth: '100%',
-              flex: '0 1 auto',
+              width:  aspect === '16:9' ? '100%' : 'auto',
+              height: aspect === '16:9' ? 'auto' : '100%',
             }}
           >
             <AnimatePresence>
@@ -3139,7 +3218,7 @@ if (dbExports.length > 0) {
             >
               <canvas
                 ref={canvasRef}
-                className="w-full h-full object-contain"
+                className="w-full h-full"
               />
             </div>
 
@@ -3244,7 +3323,8 @@ if (dbExports.length > 0) {
               </div>
             )}
           </div>
- 
+          </div>{/* end centering flex wrapper */}
+
           {/* Sign-in nudge — shown once to anonymous users after audio loads */}
           {showSignInNudge && !user && !isFullscreen && (
             <div className="shrink-0 flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white/5 border border-white/10 text-xs">
@@ -3279,31 +3359,99 @@ if (dbExports.length > 0) {
               <div className="text-xs text-gray-300 tabular-nums shrink-0 min-w-[70px]">
                 {fmt(currentTime)} / {fmt(project?.duration ?? 0)}
               </div>
-              <div className="flex-1 relative h-7 cursor-pointer select-none"
-                title="Seek  (← → arrow keys)"
+              {/* Loop region toggle */}
+              {project && (
+                <button
+                  title={loopStart !== null ? 'Clear loop region' : 'Set loop region around playhead (±15s)'}
+                  onClick={() => {
+                    if (loopStart !== null) {
+                      setLoopStart(null); setLoopEnd(null);
+                    } else {
+                      const dur = project.duration;
+                      const center = currentTime / dur;
+                      const half = Math.min(15 / dur, 0.4);
+                      setLoopStart(Math.max(0, center - half));
+                      setLoopEnd(Math.min(1, center + half));
+                    }
+                  }}
+                  className={`shrink-0 flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium border transition-colors ${
+                    loopStart !== null
+                      ? 'bg-purple-500/25 border-purple-500/50 text-purple-300'
+                      : 'bg-white/5 border-white/15 text-gray-400 hover:text-gray-200 hover:bg-white/10'
+                  }`}>
+                  <svg className="size-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M2 8h12M10 5l3 3-3 3M6 5 3 8l3 3" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  {loopStart !== null ? 'Clear' : 'Loop'}
+                </button>
+              )}
+              <div ref={seekBarRef}
+                className="flex-1 relative h-7 cursor-pointer select-none"
+                title={loopStart !== null ? 'Drag handles to adjust loop region' : 'Seek  (← → arrow keys)'}
                 onMouseDown={(e) => {
                   if (!project) return;
-                  isDraggingSeekRef.current = true;
                   const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-                  seek(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * project.duration);
+                  const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+
+                  // Check if clicking near a loop handle
+                  if (loopStart !== null && loopEnd !== null) {
+                    const startX = loopStart * rect.width;
+                    const endX   = loopEnd   * rect.width;
+                    const clickX = e.clientX - rect.left;
+                    if (Math.abs(clickX - startX) < 10) {
+                      draggingLoopHandle.current = 'start';
+                      loopDragOriginX.current = e.clientX;
+                      loopDragOriginStart.current = loopStart;
+                      loopDragOriginEnd.current = loopEnd;
+                      return;
+                    }
+                    if (Math.abs(clickX - endX) < 10) {
+                      draggingLoopHandle.current = 'end';
+                      loopDragOriginX.current = e.clientX;
+                      loopDragOriginStart.current = loopStart;
+                      loopDragOriginEnd.current = loopEnd;
+                      return;
+                    }
+                    // Clicking inside region — drag the whole region
+                    if (clickX > startX && clickX < endX) {
+                      draggingLoopHandle.current = 'region';
+                      loopDragOriginX.current = e.clientX;
+                      loopDragOriginStart.current = loopStart;
+                      loopDragOriginEnd.current = loopEnd;
+                      return;
+                    }
+                  }
+                  // Regular seek
+                  isDraggingSeekRef.current = true;
+                  seek(frac * project.duration);
                 }}
                 onMouseMove={(e) => {
-                  if (!isDraggingSeekRef.current || !project) return;
+                  if (!project) return;
                   const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-                  seek(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * project.duration);
+                  const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+
+                  if (draggingLoopHandle.current && loopStart !== null && loopEnd !== null) {
+                    const delta = (e.clientX - loopDragOriginX.current) / rect.width;
+                    const minLen = 2 / project.duration; // min 2s loop
+                    if (draggingLoopHandle.current === 'start') {
+                      setLoopStart(Math.max(0, Math.min(loopDragOriginStart.current + delta, loopDragOriginEnd.current - minLen)));
+                    } else if (draggingLoopHandle.current === 'end') {
+                      setLoopEnd(Math.max(loopDragOriginStart.current + minLen, Math.min(1, loopDragOriginEnd.current + delta)));
+                    } else {
+                      // region drag
+                      const span = loopDragOriginEnd.current - loopDragOriginStart.current;
+                      const ns   = Math.max(0, Math.min(1 - span, loopDragOriginStart.current + delta));
+                      setLoopStart(ns); setLoopEnd(ns + span);
+                    }
+                    return;
+                  }
+                  if (isDraggingSeekRef.current) seek(frac * project.duration);
                 }}
-                onMouseUp={() => { isDraggingSeekRef.current = false; }}
-                onMouseLeave={() => { isDraggingSeekRef.current = false; }}
+                onMouseUp={() => { isDraggingSeekRef.current = false; draggingLoopHandle.current = null; }}
+                onMouseLeave={() => { isDraggingSeekRef.current = false; draggingLoopHandle.current = null; }}
                 onTouchStart={(e) => {
                   if (!project) return;
                   isDraggingSeekRef.current = true;
-                  const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-                  const touch = e.touches[0];
-                  seek(Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)) * project.duration);
-                }}
-                onTouchMove={(e) => {
-                  if (!isDraggingSeekRef.current || !project) return;
-                  e.preventDefault();
                   const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
                   const touch = e.touches[0];
                   seek(Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)) * project.duration);
@@ -3319,10 +3467,10 @@ if (dbExports.length > 0) {
                         <stop offset="100%" stopColor="#ec4899" />
                       </linearGradient>
                       <clipPath id="wfPlayed">
-                        <rect x="0" y="0" width={pct * 10} height="28" />
+                        <rect x="0" y="0" width={Math.max(0, pct * 10)} height="28" />
                       </clipPath>
                       <clipPath id="wfUnplayed">
-                        <rect x={pct * 10} y="0" width={1000 - pct * 10} height="28" />
+                        <rect x={Math.max(0, pct * 10)} y="0" width={Math.max(0, 1000 - pct * 10)} height="28" />
                       </clipPath>
                     </defs>
                     {/* Unplayed portion — dim white */}
@@ -3355,16 +3503,58 @@ if (dbExports.length > 0) {
                       style={{ left: `${tickPct}%`, background: color }} />
                   );
                 })}
+
+                {/* Loop region overlay — rendered above waveform, below playhead */}
+                {loopStart !== null && loopEnd !== null && (
+                  <>
+                    <div className="absolute top-0 bottom-0 pointer-events-none rounded-sm"
+                      style={{
+                        left:    `${loopStart * 100}%`,
+                        width:   `${(loopEnd - loopStart) * 100}%`,
+                        background: 'rgba(168,85,247,0.18)',
+                        borderTop: '1.5px solid rgba(168,85,247,0.7)',
+                        borderBottom: '1.5px solid rgba(168,85,247,0.7)',
+                      }} />
+                    {/* Start handle */}
+                    <div className="absolute top-0 bottom-0 w-3 -ml-1.5 flex items-center justify-center cursor-ew-resize z-10"
+                      style={{ left: `${loopStart * 100}%` }}>
+                      <div className="w-1 h-5 rounded-full bg-purple-400 shadow-lg shadow-purple-500/40" />
+                    </div>
+                    {/* End handle */}
+                    <div className="absolute top-0 bottom-0 w-3 -ml-1.5 flex items-center justify-center cursor-ew-resize z-10"
+                      style={{ left: `${loopEnd * 100}%` }}>
+                      <div className="w-1 h-5 rounded-full bg-purple-400 shadow-lg shadow-purple-500/40" />
+                    </div>
+                    {/* Duration label — only if region is wide enough */}
+                    {(loopEnd - loopStart) > 0.12 && (
+                      <div className="absolute pointer-events-none text-[9px] text-purple-300 font-medium"
+                        style={{ left: `${(loopStart + loopEnd) / 2 * 100}%`, top: '50%', transform: 'translate(-50%, -50%)' }}>
+                        {fmt((loopEnd - loopStart) * (project?.duration ?? 0))}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
 
-            {/* Section jump chips — only when analysis is available */}
+            {/* Section jump chips — best 4 by energy score only */}
             {trackAnalysis && project && (() => {
-              // Show only high-value sections sorted by start time
-              const interesting = trackAnalysis.sections.filter(s =>
-                ['drop','chorus','verse','breakdown'].includes(s.label)
-              );
-              if (interesting.length === 0) return null;
+              // Score each section: drops/choruses are worth most
+              const scoredSections = trackAnalysis.sections
+                .filter(s => ['drop','chorus','verse','breakdown'].includes(s.label))
+                .map(s => ({
+                  ...s,
+                  score: s.energyScore * (
+                    s.label === 'drop'   ? 2.0 :
+                    s.label === 'chorus' ? 1.6 :
+                    s.label === 'verse'  ? 1.0 : 0.7
+                  ),
+                }))
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 4)
+                .sort((a, b) => a.startSec - b.startSec); // restore time order
+
+              if (scoredSections.length === 0) return null;
               const labelColor: Record<string, string> = {
                 drop:      'bg-amber-500/20 text-amber-300 border-amber-500/30',
                 chorus:    'bg-purple-500/20 text-purple-300 border-purple-500/30',
@@ -3372,11 +3562,11 @@ if (dbExports.length > 0) {
                 breakdown: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
               };
               return (
-                <div className="flex items-center gap-1.5 flex-wrap px-1 mt-1">
-                  <span className="text-[9px] uppercase tracking-wider text-white/20 shrink-0">Jump</span>
-                  {interesting.map((sec, i) => (
+                <div className="flex items-center gap-1.5 flex-wrap px-1 mt-1.5">
+                  <span className="text-[9px] uppercase tracking-wider text-white/25 shrink-0">Jump</span>
+                  {scoredSections.map((sec, i) => (
                     <button key={i} onClick={() => seek(sec.startSec)}
-                      className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${labelColor[sec.label] ?? 'bg-white/10 text-white/50 border-white/10'} hover:opacity-80 transition-opacity`}>
+                      className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${labelColor[sec.label] ?? 'bg-white/10 text-white/50 border-white/10'} hover:opacity-80 transition-opacity whitespace-nowrap`}>
                       {sec.label} {fmt(sec.startSec)}
                     </button>
                   ))}
@@ -3708,14 +3898,30 @@ if (dbExports.length > 0) {
                 </div>
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Clip duration</div>
-                  <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
-                    {(['full', 15, 30, 60] as const).map((d) => (
-                      <button key={String(d)} onClick={() => setClipDuration(d)}
-                        className={`py-1.5 rounded-lg border text-xs text-center ${clipDuration === d ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
-                        {d === 'full' ? 'Full' : `${d}s`}
-                      </button>
-                    ))}
-                  </div>
+                  {loopStart !== null && loopEnd !== null ? (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-purple-500/15 border border-purple-500/30">
+                      <svg className="size-3 text-purple-400 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <path d="M2 8h12M10 5l3 3-3 3M6 5 3 8l3 3" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] text-purple-300 font-medium">Loop region active</p>
+                        <p className="text-[10px] text-purple-300/60">
+                          {fmt(loopStart * (project?.duration ?? 0))} → {fmt(loopEnd * (project?.duration ?? 0))} · {fmt((loopEnd - loopStart) * (project?.duration ?? 0))}
+                        </p>
+                      </div>
+                      <button onClick={() => { setLoopStart(null); setLoopEnd(null); }}
+                        className="text-purple-400/60 hover:text-purple-300 transition-colors text-[10px]">Clear</button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+                      {(['full', 15, 30, 60] as const).map((d) => (
+                        <button key={String(d)} onClick={() => setClipDuration(d)}
+                          className={`py-1.5 rounded-lg border text-xs text-center ${clipDuration === d ? 'bg-white text-gray-900 border-white' : 'bg-white/5 border-white/15 hover:bg-white/10'}`}>
+                          {d === 'full' ? 'Full' : `${d}s`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Quality</div>
@@ -3763,6 +3969,37 @@ if (dbExports.length > 0) {
                     </button>
                   </div>
                   <p className="text-[10px] text-gray-600 mt-1.5">Save and restore engine, palette &amp; motion settings as a JSON file.</p>
+                </div>
+
+                {/* ── Named presets ────────────────────────────── */}
+                <div className="pt-2 border-t border-white/10 mt-2">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-400 mb-2">Saved presets</div>
+                  {savedPresets.length > 0 && (
+                    <div className="flex flex-col gap-1.5 mb-2">
+                      {savedPresets.map((p) => (
+                        <div key={p.name} className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/5 border border-white/8">
+                          <span className="flex-1 text-[11px] text-gray-300 truncate">{p.name}</span>
+                          <button onClick={() => loadPreset(p)} title="Load preset"
+                            className="text-[10px] text-purple-400 hover:text-purple-300 px-1.5 py-0.5 rounded hover:bg-purple-500/10 transition-colors">
+                            Load
+                          </button>
+                          <button onClick={() => deletePreset(p.name)} title="Delete preset"
+                            className="text-gray-600 hover:text-red-400 transition-colors">
+                            <Trash className="size-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => {
+                      const name = window.prompt('Name this preset:', `${ENGINE_LABELS_SHORT[engine] ?? engine} ${new Date().toLocaleDateString()}`);
+                      if (name?.trim()) saveCurrentPreset(name.trim());
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-[11px] text-gray-300 transition-colors">
+                    <Star className="size-3" /> Save current as preset
+                  </button>
+                  <p className="text-[10px] text-gray-600 mt-1.5">Presets save engine, variant, palette &amp; all motion settings.</p>
                 </div>
               </TabsContent>
  
