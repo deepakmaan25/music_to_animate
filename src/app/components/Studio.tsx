@@ -99,15 +99,15 @@ const ENGINE_LABELS_SHORT: Record<string, string> = {
 // ── Per-engine optimal motion defaults ────────────────────────────────────────
 type MotionDefaults = { beatSensitivity: number; particleDensity: number; smoothing: number; baseSpeed: number; beatResponse: number };
 const ENGINE_MOTION_DEFAULTS: Record<string, MotionDefaults> = {
-  bars:         { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
-  radial:       { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
-  orbital:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
-  depth:        { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.65, baseSpeed: 1.0, beatResponse: 0.90 },
-  terrain:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
-  tunnel:       { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
-  neon_spheres: { beatSensitivity: 1.0, particleDensity: 0.97, smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
-  fractal:      { beatSensitivity: 1.0, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
-  solar:        { beatSensitivity: 1.0, particleDensity: 0.95, smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  bars:         { beatSensitivity: 0.8, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  radial:       { beatSensitivity: 0.8, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  orbital:      { beatSensitivity: 0.8, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  depth:        { beatSensitivity: 0.8, particleDensity: 1.0,  smoothing: 0.65, baseSpeed: 1.0, beatResponse: 0.90 },
+  terrain:      { beatSensitivity: 0.8, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  tunnel:       { beatSensitivity: 0.8, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  neon_spheres: { beatSensitivity: 0.8, particleDensity: 0.97, smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  fractal:      { beatSensitivity: 0.8, particleDensity: 1.0,  smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
+  solar:        { beatSensitivity: 0.8, particleDensity: 0.95, smoothing: 0.80, baseSpeed: 1.0, beatResponse: 0.90 },
 };
 
 // ─── Engine style variants ────────────────────────────────────────────────────
@@ -252,7 +252,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
   const [engine, setEngine]                   = useState<EngineId>((stored?.engineId as EngineId) ?? initialEngine);
   const [variant, setVariant]                 = useState<string>(''); // '' = first/default variant
   const [palette, setPalette]                 = useState(stored?.style.palette ?? 0);
-  const [beatSensitivity, setBeatSensitivity] = useState(stored?.motion.beatSensitivity ?? 0.7);
+  const [beatSensitivity, setBeatSensitivity] = useState(stored?.motion.beatSensitivity ?? 0.8);
   const [particleDensity, setParticleDensity] = useState(stored?.motion.particleDensity ?? 0.6);
   const [smoothing, setSmoothing]             = useState(stored?.motion.smoothing ?? 0.8);
   const [perfMode, setPerfMode]               = useState(false);
@@ -1360,12 +1360,14 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
       const cols = perf ? 18 : 34, rows = perf ? 12 : 24;
       const horizon = h * (0.38 + sectionIntensity * 0.06); // horizon rises at drops
 
-      // Sky gradient
-      const sky = ctx.createLinearGradient(0, 0, 0, horizon);
-      sky.addColorStop(0, `rgba(${hexToRgb(liveColors[0], hxCache)}, ${0.18 + highs * 0.4})`);
-      sky.addColorStop(0.6, `rgba(${hexToRgb(liveColors[1], hxCache)}, ${0.04 + bass * 0.12})`);
-      sky.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = sky; ctx.fillRect(0, 0, w, horizon);
+      // Sky gradient — skip for grid variant (flat canvas looks better)
+      if (vrnt !== 'grid') {
+        const sky = ctx.createLinearGradient(0, 0, 0, horizon);
+        sky.addColorStop(0, `rgba(${hexToRgb(liveColors[0], hxCache)}, ${0.18 + highs * 0.4})`);
+        sky.addColorStop(0.6, `rgba(${hexToRgb(liveColors[1], hxCache)}, ${0.04 + bass * 0.12})`);
+        sky.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = sky; ctx.fillRect(0, 0, w, horizon);
+      }
 
       // Terrain mesh — amplitude scales with sectionIntensity + energyMult + beat burst
       const ampScale = (0.5 + sectionIntensity * 0.5) * energyMult * (1 + elevBurst * 0.6);
@@ -1427,23 +1429,32 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
         cameraTRef.current += (0.012 + bass * 0.016 * sens) * energyMult;
         const gt = cameraTRef.current;
 
+        // Draw dim baseline grid lines so structure is always visible
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        ctx.lineWidth = 0.5;
+        for (let col = 0; col <= gCols; col++) {
+          ctx.beginPath(); ctx.moveTo(col * cellW, 0); ctx.lineTo(col * cellW, h); ctx.stroke();
+        }
+        for (let row = 0; row <= gRows; row++) {
+          ctx.beginPath(); ctx.moveTo(0, row * cellH); ctx.lineTo(w, row * cellH); ctx.stroke();
+        }
+
         for (let row = 0; row < gRows; row++) {
           for (let col = 0; col < gCols; col++) {
             const freqIdx = Math.min(Math.floor((col / gCols) * freq.length * 0.65), freq.length - 1);
-            const v = (freq[freqIdx] / 255) * sens;
+            const v = Math.max(0.05, (freq[freqIdx] / 255) * sens); // floor at 0.05 so quiet cells still glow faintly
             const ripple = 0.5 + 0.5 * Math.sin(col * 0.9 + row * 0.9 - gt * 4);
-            const intensity = Math.min(1, v * ripple * energyMult * (0.5 + sectionIntensity * 0.5));
-            if (intensity < 0.03) continue;
+            const intensity = Math.min(1, v * ripple * (0.6 + sectionIntensity * 0.4));
             const color = liveColors[(col + Math.floor(row * 0.5)) % liveColors.length];
-            const pad   = cellW * (0.1 + (1 - intensity) * 0.28);
+            const pad   = cellW * (0.12 + (1 - intensity) * 0.22);
             ctx.fillStyle = color;
-            ctx.globalAlpha = intensity * 0.72;
-            ctx.shadowColor = color; ctx.shadowBlur = intensity * 22;
+            ctx.globalAlpha = 0.08 + intensity * 0.65; // minimum 8% so cells are always faintly lit
+            ctx.shadowColor = color; ctx.shadowBlur = intensity * 18;
             ctx.fillRect(col * cellW + pad, row * cellH + pad, cellW - pad * 2, cellH - pad * 2);
             // Bright border ring
             ctx.strokeStyle = color;
             ctx.lineWidth = 0.5;
-            ctx.globalAlpha = intensity * 0.22;
+            ctx.globalAlpha = intensity * 0.28;
             ctx.strokeRect(col * cellW + 1, row * cellH + 1, cellW - 2, cellH - 2);
           }
         }
@@ -1577,7 +1588,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           const bandVal = avg(freq, bandLo, bandHi) * sens * energyMult;
           const color   = liveColors[ri % liveColors.length];
           const colX    = w * (0.05 + ri / numRibbons * 0.9);
-          const amp     = (20 + bandVal * w * 0.12) * (0.4 + sectionIntensity * 0.6);
+          const amp     = Math.min(w / 9, (20 + bandVal * w * 0.06) * (0.4 + sectionIntensity * 0.6));
           const freq2   = 2.5 + ri * 0.7;
           const phase   = t * (0.8 + ri * 0.15);
           const piF2    = Math.PI * freq2;
@@ -1734,7 +1745,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           const bandVal = avg(freq, bandLo, bandHi) * sens * energyMult;
           const color   = liveColors[ri % liveColors.length];
           const ribbonY = h * (0.1 + ri / numRibbons * 0.8);
-          const amp     = (20 + bandVal * h * 0.22) * (0.4 + sectionIntensity * 0.6);
+          const amp     = Math.min(h / 9, (20 + bandVal * h * 0.06) * (0.4 + sectionIntensity * 0.6));
           const freq2   = 2.5 + ri * 0.7;
           const phase   = t * (0.8 + ri * 0.15);
           const buf     = ribbonPathCache.current[ri];
@@ -1813,7 +1824,7 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
           vx: (Math.random() - 0.5) * 0.0015,
           vy: (Math.random() - 0.5) * 0.0015,
           phase: (i / N) * Math.PI * 2,
-          size: 0.045 + Math.random() * 0.045,
+          size: 0.022 + Math.random() * 0.022,   // was 0.045–0.09, halved
           hue: i / N,
         }));
       }
@@ -1882,9 +1893,9 @@ export function Studio({ initialFile, initialEngine = 'bars', projectId, persist
 
         const sx = sp.x * w, sy = sp.y * h;
         const minDim = Math.min(w, h);
-        // Size: band energy + beat pulse + section intensity
-        const beatBoost = i === 0 ? (1 + sphereBeat * 3) : 1; // kick drum hits sphere 0 hardest
-        const r = sp.size * minDim * (1 + be * sens * 2.0) * (1 + bass * 0.3) * (0.7 + sectionIntensity * 0.3) * beatBoost;
+        // Size: band energy + beat pulse + section intensity — kept proportional, not screen-filling
+        const beatBoost = i === 0 ? (1 + sphereBeat * 1.5) : 1;
+        const r = sp.size * minDim * (1 + be * sens * 0.9) * (1 + bass * 0.15) * (0.7 + sectionIntensity * 0.3) * beatBoost;
         const color = liveColors[i % liveColors.length];
 
         ctx.save();
